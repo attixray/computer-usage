@@ -7,6 +7,9 @@ $env:NUGET_PACKAGES = Join-Path $projectRoot 'artifacts\packages'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = '0'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+[xml]$appProject = Get-Content -LiteralPath 'src\CompUsage.App\CompUsage.App.csproj' -Raw
+$version = [string]$appProject.Project.PropertyGroup.Version
+if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'The application version must have three numeric components.' }
 
 function Invoke-Checked([string]$File, [string[]]$Arguments) {
     & $File @Arguments
@@ -81,6 +84,13 @@ foreach ($directory in Get-ChildItem -LiteralPath $publishDirectory -Directory -
 [System.IO.File]::WriteAllLines((Join-Path $projectRoot 'installer\uninstall-files.nsh'), $uninstallLines, [System.Text.UTF8Encoding]::new($false))
 if (-not $SkipTests) { & (Join-Path $projectRoot 'tests\installer-monitor-check.ps1') -ProjectRoot $projectRoot }
 # Unicode output does not select the input script encoding. Decode our UTF-8 sources explicitly.
-Invoke-Checked $compiler @('/INPUTCHARSET', 'UTF8', '/WX', '/V2', 'installer\CompUsage.nsi')
-Compress-Archive -Path 'artifacts\publish\*' -DestinationPath 'artifacts\release\CompUsage-1.0.5-portable-x64.zip' -Force
-Get-ChildItem -LiteralPath $releaseDirectory -File | Get-FileHash -Algorithm SHA256 | Format-Table
+Invoke-Checked $compiler @('/INPUTCHARSET', 'UTF8', '/WX', '/V2', "/DAPP_VERSION=$version", 'installer\CompUsage.nsi')
+$portable = Join-Path $releaseDirectory "CompUsage-$version-portable-x64.zip"
+Compress-Archive -Path 'artifacts\publish\*' -DestinationPath $portable -Force
+$packages = @((Join-Path $releaseDirectory "CompUsage-$version-Setup-x64.exe"), $portable)
+$checksums = foreach ($package in $packages) {
+    $hash = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $([System.IO.Path]::GetFileName($package))"
+}
+[System.IO.File]::WriteAllText((Join-Path $releaseDirectory 'SHA256SUMS.txt'), ($checksums -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
+$checksums

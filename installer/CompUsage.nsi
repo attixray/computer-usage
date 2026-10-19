@@ -3,15 +3,18 @@
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
+!ifndef APP_VERSION
+  !error "Build with build.ps1 or provide /DAPP_VERSION=x.y.z."
+!endif
 Name "CompUsage"
-OutFile "..\artifacts\release\CompUsage-1.0.5-Setup-x64.exe"
+OutFile "..\artifacts\release\CompUsage-${APP_VERSION}-Setup-x64.exe"
 InstallDir "$LOCALAPPDATA\Programs\CompUsage"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-VIProductVersion "1.0.5.0"
+VIProductVersion "${APP_VERSION}.0"
 VIAddVersionKey "ProductName" "CompUsage"
 VIAddVersionKey "FileDescription" "CompUsage Setup"
-VIAddVersionKey "FileVersion" "1.0.5"
+VIAddVersionKey "FileVersion" "${APP_VERSION}"
 VIAddVersionKey "LegalCopyright" "CompUsage contributors"
 !define MUI_ABORTWARNING
 !define MUI_ICON "..\src\CompUsage.App\Assets\CompUsage.ico"
@@ -84,7 +87,7 @@ Section "CompUsage"
   CreateShortcut "$SMPROGRAMS\CompUsage\CompUsage.lnk" "$INSTDIR\CompUsage.exe"
   CreateShortcut "$SMPROGRAMS\CompUsage\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayName" "CompUsage"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayVersion" "1.0.5"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayIcon" "$INSTDIR\CompUsage.exe"

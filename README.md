@@ -15,6 +15,7 @@ A local Windows work-log application based on the current user's lock and unlock
 - Settings dialog, remembered font/window size, expanded days, and scroll position.
 - Settings use the available window height; only overflowing panel content scrolls, while Save and Cancel stay visible.
 - A custom clock-and-lock app icon is included in the executable, native window, interface and installer.
+- Launching again from the Start menu or shortcut brings the existing window to the foreground and restores it when minimized.
 - Optional background last-input tracking, disabled by default, with selectable lock-time or last-input endpoints for display, copying and Excel.
 - `.xlsx` Details preview, append, optional completion of an unfinished row, backup, and detection of changes after preview.
 
@@ -72,7 +73,20 @@ Prerequisites: Windows x64, .NET SDK 10.0.402, Node.js 22 or later, and PowerShe
 ./build.ps1
 ```
 
-The build restores packages, runs C# and UI checks, publishes a self-contained application, verifies the downloaded NSIS compiler by its pinned SHA-256 checksum, verifies Microsoft's signature on the WebView2 bootstrapper, and creates Setup and portable ZIP files under `artifacts/release/`. The bootstrapper URL follows Microsoft's Evergreen release; the compiler and SDK versions are pinned.
+The build restores packages, runs C# and UI checks, publishes a self-contained application, verifies the downloaded NSIS compiler by its pinned SHA-256 checksum, verifies Microsoft's signature on the WebView2 bootstrapper, and creates Setup, portable ZIP and `SHA256SUMS.txt` files under `artifacts/release/`. Application and package versions come from `<Version>` in `src/CompUsage.App/CompUsage.App.csproj`; direct NSIS invocation must supply `/DAPP_VERSION=x.y.z`. The bootstrapper URL follows Microsoft's Evergreen release; the compiler and SDK versions are pinned.
+
+## GitHub builds and releases
+
+Download installers and portable packages from [GitHub Releases](https://github.com/attixray/computer-usage/releases). Every push, pull request and manual workflow run builds and tests on a GitHub-hosted Windows runner. The resulting packages and checksums are also available as versioned artifacts on the [Actions page](https://github.com/attixray/computer-usage/actions).
+
+To publish a new version, change only the application `<Version>`, commit it, and push a matching version tag such as `v1.0.6`. The workflow rejects a tag that does not match the project version. After all checks and packaging succeed, it verifies the package checksums and publishes a GitHub Release with Setup, the portable ZIP and the checksum file. Release publishing uses the workflow's repository-scoped token; no personal access token is stored in the project. Branch builds do not publish releases.
+
+```powershell
+git tag -a v1.0.6 -m "CompUsage 1.0.6"
+git push origin main v1.0.6
+```
+
+## Development checks
 
 If local policy prevents scripts, run the commands in `build.ps1` from an allowed shell or use the GitHub Actions workflow. There is no need to weaken machine execution policy.
 

@@ -9,13 +9,44 @@ using CompUsage.App.Services;
 internal static class Program
 {
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
         try
         {
+            if (args is ["--activate-instance", var instanceName])
+            {
+                using var instance = new SingleInstance(instanceName);
+                Require(!instance.IsPrimary);
+                instance.RequestActivation();
+                return 0;
+            }
             var checks = 0;
             void Check(string name, Action test) { test(); checks++; Console.WriteLine("PASS " + name); }
             const string sid = "S-1-5-21-123-456-789-1001";
+            Check("A second launch queues activation during startup and can activate the existing instance repeatedly", () =>
+            {
+                var name = "CompUsage.Check." + Guid.NewGuid().ToString("N");
+                using (var primary = new SingleInstance(name))
+                {
+                    using var secondary = new SingleInstance(name);
+                    Require(primary.IsPrimary && !secondary.IsPrimary);
+                    void LaunchAgain()
+                    {
+                        var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
+                        start.ArgumentList.Add("--activate-instance"); start.ArgumentList.Add(name);
+                        using var child = Process.Start(start) ?? throw new Exception("The second instance could not start.");
+                        Require(child.WaitForExit(5000) && child.ExitCode == 0);
+                    }
+                    LaunchAgain();
+                    using var received = new AutoResetEvent(false);
+                    primary.Listen(() => received.Set());
+                    Require(received.WaitOne(TimeSpan.FromSeconds(5)));
+                    LaunchAgain();
+                    Require(received.WaitOne(TimeSpan.FromSeconds(5)));
+                }
+                using var next = new SingleInstance(name);
+                Require(next.IsPrimary);
+            });
             Check("Read delegation adds only the requested account and access bit, preserving existing ACL entries", () =>
             {
                 const string before = "O:BAG:SYD:(D;;0x4;;;WD)(A;;0x7;;;SY)(A;;0x7;;;BA)";

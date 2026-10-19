@@ -14,7 +14,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../CompUsage.Core/CompUsage.Core.csproj" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.5258.31" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
     <Content Include="Ui\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Resource Include="Assets\CompUsage.ico" />
   </ItemGroup>
