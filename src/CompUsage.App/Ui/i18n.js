@@ -51,6 +51,7 @@ window.i18n = (() => {
     'A Windows-jóváhagyás elmaradt. A Frissítés gombbal újra próbálhatod.':'Windows approval was cancelled. Use Refresh to try again.',
     'A segédet ugyanazzal a Windows-fiókkal kell jóváhagyni.':'Approve the helper using the same Windows account.',
     'A Windows-segéd leállt.':'The Windows helper stopped.','Nem indult el a Windows-napló segédje.':'The Windows event-log helper could not start.'
+    ,'Nem a várt Windows-segéd kapcsolódott.':'An unexpected process connected instead of the Windows helper.'
   };
   function text(value, language) {
     if(language!=='en')return value;

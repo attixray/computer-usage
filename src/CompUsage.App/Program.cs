@@ -8,6 +8,16 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args is ["--verify-broker"])
+        {
+            try
+            {
+                using var broker = new SecurityBroker();
+                broker.RequestAsync("ping", verifyConnection: true).GetAwaiter().GetResult();
+                return 0;
+            }
+            catch { return 4; }
+        }
         if (args is ["--verify-install"])
         {
             try

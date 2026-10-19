@@ -33,11 +33,23 @@ $dependenciesDirectory = Join-Path $projectRoot 'installer\dependencies'
 $releaseDirectory = Join-Path $projectRoot 'artifacts\release'
 New-Item -ItemType Directory -Force -Path $toolsDirectory, $dependenciesDirectory, $releaseDirectory | Out-Null
 $compilerArchive = Join-Path $toolsDirectory 'nsis.zip'
-if (-not (Test-Path -LiteralPath $compilerArchive)) {
-    Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13.zip' -OutFile $compilerArchive
-}
-if ((Get-FileHash -LiteralPath $compilerArchive -Algorithm SHA256).Hash -ne 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8') {
-    throw 'The NSIS archive does not match its pinned checksum.'
+$compilerHash = 'BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8'
+$validArchive = (Test-Path -LiteralPath $compilerArchive) -and (Get-FileHash -LiteralPath $compilerArchive -Algorithm SHA256).Hash -eq $compilerHash
+if (-not $validArchive) {
+    # Some SourceForge gateways return an HTML mirror-selection page with HTTP 200.
+    # Never extract that response; try another official mirror and require the same pinned hash.
+    foreach ($mirror in @('downloads.sourceforge.net', 'master.dl.sourceforge.net', 'netix.dl.sourceforge.net', 'phoenixnap.dl.sourceforge.net')) {
+        try {
+            Invoke-Checked 'curl.exe' @('-fL', '--retry', '2', '--max-time', '120', "https://$mirror/project/nsis/NSIS%203/3.13/nsis-3.13.zip", '-o', "$compilerArchive.download")
+            if ((Get-FileHash -LiteralPath "$compilerArchive.download" -Algorithm SHA256).Hash -eq $compilerHash) {
+                Move-Item -LiteralPath "$compilerArchive.download" -Destination $compilerArchive -Force
+                $validArchive = $true
+                break
+            }
+            Write-Warning "The response from $mirror is not the pinned NSIS archive."
+        } catch { Write-Warning $_ }
+    }
+    if (-not $validArchive) { throw 'Unable to download the NSIS archive with its pinned checksum.' }
 }
 $compiler = Join-Path $toolsDirectory 'nsis-3.13\makensis.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { Expand-Archive -LiteralPath $compilerArchive -DestinationPath $toolsDirectory }

@@ -64,6 +64,8 @@ dotnet run --project src/CompUsage.App
 
 `CompUsage.exe --verify-install` checks the deployed UI assets and installed WebView2 runtime without opening a window or modifying Windows auditing. Exit 0 means those prerequisites were found; this is not an interactive UI test.
 
+`CompUsage.exe --verify-broker` starts an unelevated helper and checks the authenticated, same-user pipe round trip. It does not read the event log, modify auditing, or display UAC. A real UAC transition still needs an interactive Windows check.
+
 ## Structure
 
 - `src/CompUsage.Core`: event parsing, time rules, work sections, workbook preview/write.
