@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+.vs/
+artifacts/
+*.user
+*.suo
+installer/dependencies/
+installer/uninstall-files.nsh
+node_modules/
+*.xlsx
+*.xls
+*.log

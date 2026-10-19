@@ -1,0 +1,260 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.Json;
+using System.Windows;
+using CompUsage.App.Services;
+using CompUsage.Core;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+using Microsoft.Win32;
+
+namespace CompUsage.App;
+
+public sealed class MainWindow : Window
+{
+    private const string Origin = "https://compusage.local/";
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private readonly WebView2 view = new();
+    private readonly LocalStore store = new();
+    private readonly LocalState state;
+    private readonly SecurityBroker broker = new();
+    private readonly WorkbookService workbook = new(TimeZoneInfo.Local);
+    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly Dictionary<string, string?> undo = [];
+    private WorkbookPlan? activePlan;
+    private string? planToken;
+    private string? lastError;
+    private object? workbookInfo;
+    private bool closing;
+
+    public MainWindow()
+    {
+        state = store.Load();
+        Title = state.Settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
+        MinWidth = 600; MinHeight = 480;
+        Width = state.Settings.RememberView ? state.Width : 1180;
+        Height = state.Settings.RememberView ? state.Height : 850;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        if (state.Settings.RememberView && state.Left is { } left && state.Top is { } top
+            && left < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 100
+            && left + Width > SystemParameters.VirtualScreenLeft + 100
+            && top < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 100
+            && top + Height > SystemParameters.VirtualScreenTop + 100)
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual; Left = left; Top = top;
+        }
+        if (state.Settings.RememberView && state.Maximized) WindowState = WindowState.Maximized;
+        Content = view;
+        Loaded += async (_, _) => await InitializeAsync();
+        Closing += (_, e) =>
+        {
+            if (gate.CurrentCount == 0) { e.Cancel = true; return; }
+            closing = true;
+            try
+            {
+                state.Maximized = WindowState == WindowState.Maximized;
+                var rect = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+                state.Left = rect.Left; state.Top = rect.Top; state.Width = rect.Width; state.Height = rect.Height;
+                store.Save(state);
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, state.Settings.Language == "en" ? "Could not save the view" : "A nézet mentése nem sikerült"); }
+            broker.Dispose(); view.Dispose();
+        };
+    }
+
+    private async Task InitializeAsync()
+    {
+        try
+        {
+            var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(LocalStore.DirectoryPath, "WebView2"));
+            await view.EnsureCoreWebView2Async(environment);
+            var core = view.CoreWebView2;
+            core.SetVirtualHostNameToFolderMapping("compusage.local", Path.Combine(AppContext.BaseDirectory, "Ui"), CoreWebView2HostResourceAccessKind.DenyCors);
+            core.Settings.AreDevToolsEnabled = false;
+            core.Settings.AreDefaultContextMenusEnabled = true;
+            core.Settings.IsStatusBarEnabled = false;
+            core.Settings.AreHostObjectsAllowed = false;
+            core.Settings.IsWebMessageEnabled = true;
+            core.NavigationStarting += (_, e) => { if (e.Uri != Origin + "index.html") e.Cancel = true; };
+            core.NewWindowRequested += (_, e) => e.Handled = true;
+            core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
+            core.DownloadStarting += (_, e) => e.Cancel = true;
+            core.WebMessageReceived += Receive;
+            core.ProcessFailed += (_, _) => MessageBox.Show(state.Settings.Language == "en"
+                ? "The interface stopped. Close and restart CompUsage. Saved data is preserved."
+                : "A felület leállt. Zárd be és indítsd újra a CompUsage alkalmazást. A mentett adatok megmaradtak.", "CompUsage");
+            core.Navigate(Origin + "index.html");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show((state.Settings.Language == "en"
+                ? "The interface could not start. Install Microsoft Edge WebView2 Runtime or run Setup again.\n\n"
+                : "A felület nem indítható. Telepítsd a Microsoft Edge WebView2 Runtime-ot, vagy futtasd újra a telepítőt.\n\n") + ex.Message, "CompUsage", MessageBoxButton.OK, MessageBoxImage.Error);
+            Close();
+        }
+    }
+
+    private async void Receive(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (e.Source != Origin + "index.html" || closing) return;
+        string? id = null;
+        await gate.WaitAsync();
+        try
+        {
+            using var document = JsonDocument.Parse(e.WebMessageAsJson);
+            var message = document.RootElement;
+            id = message.GetProperty("id").GetString();
+            var command = message.GetProperty("command").GetString();
+            var data = message.TryGetProperty("data", out var payload) ? payload : default;
+            var result = await DispatchAsync(command, data);
+            if (!closing) view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { id, ok = true, result }, Json));
+        }
+        catch (Exception ex)
+        {
+            var error = ex is System.ComponentModel.Win32Exception { NativeErrorCode: 1223 }
+                ? "A Windows-jóváhagyás elmaradt. A Frissítés gombbal újra próbálhatod." : ex.Message;
+            if (!closing) view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { id, ok = false, error }, Json));
+        }
+        finally { gate.Release(); }
+    }
+
+    private IReadOnlyList<WorkReport> Reports() => WorkReports.Build(state.Events, state.Settings, state.Lunches,
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps);
+
+    private async Task<object?> DispatchAsync(string? command, JsonElement data)
+    {
+        switch (command)
+        {
+            case "load":
+                await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "refresh":
+                try
+                {
+                    var reply = await broker.RequestAsync("read");
+                    var read = reply.Data!;
+                    state.Events = state.Events.Concat(read.Events).DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ToList();
+                    state.OldestAvailable = read.OldestAvailable; state.LastRefresh = DateTimeOffset.Now;
+                    RecordLogging(reply.Logging);
+                    lastError = null; store.Save(state);
+                }
+                catch (Exception ex) { lastError = "A napló frissítése nem sikerült: " + ex.Message; }
+                activePlan = null; await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "settings":
+                var settings = data.GetProperty("settings").Deserialize<AppSettings>(Json) ?? throw new ArgumentException("Hiányzó beállítások.");
+                settings.Validate();
+                if (data.TryGetProperty("logging", out var logging) && logging.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    && state.Logging != logging.GetBoolean())
+                {
+                    var reply = await broker.RequestAsync("audit", logging.GetBoolean()); RecordLogging(reply.Logging);
+                }
+                state.Settings = settings; activePlan = null; store.Save(state);
+                Title = settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
+                await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "history":
+                var history = data.GetProperty("days").GetInt32();
+                if (history is not (7 or 30 or 60)) throw new ArgumentException("Érvénytelen időtartam.");
+                state.Settings = state.Settings with { HistoryDays = history };
+                activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "lunch":
+                var date = data.GetProperty("date").GetString()!;
+                var chosen = data.GetProperty("value").ValueKind == JsonValueKind.Null ? null : data.GetProperty("value").GetString();
+                var day = Reports().Single(d => d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) == date);
+                if (chosen is not null && chosen != "none" && day.Pairs.All(p => p.Id != chosen)) throw new ArgumentException("Nincs ilyen ebédpár.");
+                undo[date] = state.Lunches.GetValueOrDefault(date);
+                if (chosen is null) state.Lunches.Remove(date); else state.Lunches[date] = chosen;
+                activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "undo":
+                var key = data.GetProperty("date").GetString()!;
+                if (undo.Remove(key, out var old)) { if (old is null) state.Lunches.Remove(key); else state.Lunches[key] = old; }
+                activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "copy":
+                var text = data.GetProperty("text").GetString() ?? "";
+                if (text.Length > 2_000_000) throw new ArgumentException("Túl sok másolandó adat.");
+                for (var attempt = 0; ; attempt++)
+                {
+                    try { Clipboard.SetText(text); break; }
+                    catch (System.Runtime.InteropServices.COMException) when (attempt < 4) { await Task.Delay(80); }
+                }
+                return true;
+            case "paste": return Clipboard.ContainsText() ? Clipboard.GetText() : "";
+            case "pickFile":
+                var dialog = new OpenFileDialog { Filter = "Excel (*.xlsx)|*.xlsx", CheckFileExists = true,
+                    Title = state.Settings.Language == "en" ? "Select a work-log workbook" : "Munkaidőfájl kiválasztása" };
+                return dialog.ShowDialog(this) == true ? dialog.FileName : null;
+            case "openFile":
+                if (!File.Exists(state.Settings.WorkbookPath)) throw new FileNotFoundException("A beállított .xlsx fájl nem található.");
+                Process.Start(new ProcessStartInfo(state.Settings.WorkbookPath) { UseShellExecute = true }); return true;
+            case "preview":
+                activePlan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, Reports()));
+                planToken = Guid.NewGuid().ToString("N"); return PlanSnapshot(activePlan, planToken);
+            case "commit":
+                if (activePlan is null || data.GetProperty("token").GetString() != planToken) throw new IOException("Az előnézet lejárt. Kérj új előnézetet.");
+                var selected = data.GetProperty("partials").Deserialize<int[]>(Json) ?? [];
+                var plan = activePlan; activePlan = null;
+                var backup = await Task.Run(() => workbook.Commit(plan, selected));
+                await UpdateWorkbookInfoAsync(); return new { state = Snapshot(), backup };
+            case "view":
+                if (state.Settings.RememberView)
+                {
+                    state.Expanded = (data.GetProperty("expanded").Deserialize<string[]>(Json) ?? []).Take(60).ToArray();
+                    state.Scroll = Math.Clamp(data.GetProperty("scroll").GetDouble(), 0, 1_000_000);
+                    store.Save(state);
+                }
+                return true;
+            default: throw new ArgumentException("Ismeretlen művelet.");
+        }
+    }
+
+    private void RecordLogging(bool? enabled)
+    {
+        if (enabled == false && state.Logging != false) state.Gaps.Add(new(DateTimeOffset.Now, null));
+        if (enabled == true)
+            for (var i = 0; i < state.Gaps.Count; i++) if (state.Gaps[i].To is null) state.Gaps[i] = state.Gaps[i] with { To = DateTimeOffset.Now };
+        state.Logging = enabled;
+    }
+
+    private async Task UpdateWorkbookInfoAsync()
+    {
+        try
+        {
+            var reports = Reports();
+            var plan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, reports));
+            workbookInfo = new { available = true, lastDate = plan.LastDate?.ToString("yyyy.MM.dd", CultureInfo.InvariantCulture),
+                days = plan.Rows.Select(r => r.Date).Distinct().Count(), rows = plan.Rows.Count, partials = plan.Partials.Count, error = (string?)null };
+        }
+        catch (Exception ex) { workbookInfo = new { available = false, error = ex.Message }; }
+    }
+
+    private static object? TimeValue(DateTimeOffset? time) => time is null ? null : new
+    {
+        display = Presentation.Time(time.Value, TimeZoneInfo.Local),
+        exact = Presentation.Time(time.Value, TimeZoneInfo.Local, true),
+        date = TimeZoneInfo.ConvertTime(Presentation.RoundMinute(time.Value), TimeZoneInfo.Local).ToString("yyyy.MM.dd", CultureInfo.InvariantCulture)
+    };
+    private static object RowSnapshot(WorkInterval row) => new { date = Presentation.Date(row.Date), from = TimeValue(row.From),
+        to = TimeValue(row.To), duration = Duration(row.Duration), open = row.Open, copy = Presentation.CopyRow(row, TimeZoneInfo.Local) };
+    private static string Duration(TimeSpan duration) => $"{(int)Math.Round(duration.TotalMinutes) / 60:00}:{(int)Math.Round(duration.TotalMinutes) % 60:00}";
+    private static object PlanSnapshot(WorkbookPlan plan, string token) => new { token, rows = plan.Rows.Select(RowSnapshot),
+        partials = plan.Partials.Select(p => new { row = p.Row, section = RowSnapshot(p.Interval) }) };
+
+    private object Snapshot() => new
+    {
+        settings = state.Settings, logging = state.Logging, error = lastError,
+        user = Environment.UserName, refreshed = state.LastRefresh?.ToLocalTime().ToString("yyyy.MM.dd HH:mm:ss", CultureInfo.InvariantCulture),
+        oldest = state.OldestAvailable?.ToLocalTime().ToString("yyyy.MM.dd HH:mm", CultureInfo.InvariantCulture),
+        workbook = workbookInfo, expanded = state.Settings.RememberView ? state.Expanded : [], scroll = state.Settings.RememberView ? state.Scroll : 0,
+        days = Reports().Select(d => new
+        {
+            key = d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), date = Presentation.Date(d.Date),
+            weekday = d.Date.ToString("dddd", CultureInfo.GetCultureInfo("hu-HU")), status = d.Status, ongoing = d.Ongoing,
+            incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.Timestamp),
+            manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.Timestamp), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)Math.Round(d.Lunch.Duration.TotalMinutes) },
+            pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.Timestamp), to = TimeValue(p.Unlock.Timestamp), minutes = (int)Math.Round(p.Duration.TotalMinutes) }),
+            sections = d.Sections.Select(RowSnapshot),
+            copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(s => Presentation.CopyRow(s, TimeZoneInfo.Local))) : "",
+            eventCopy = "Dátum\tIdőpont\tEsemény\tAzonosító\r\n" + string.Join("\r\n", d.Events.Select(e => $"{TimeZoneInfo.ConvertTime(e.Timestamp, TimeZoneInfo.Local):yyyy.MM.dd}\t{Presentation.Time(e.Timestamp, TimeZoneInfo.Local, true)}\t{e.Label}\t{e.EventId}")),
+            events = d.Events.Select(e => new { time = TimeValue(e.Timestamp), label = e.Label, eventId = e.EventId })
+        })
+    };
+}

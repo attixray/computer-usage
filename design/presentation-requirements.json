@@ -1,0 +1,65 @@
+{
+  "status": "Native Windows implementation with automated core/workbook and DOM tests; interactive end-to-end validation still required",
+  "preferredLayout": "Napi kártyák",
+  "deployment": "Local Windows executable",
+  "technology": "C# / .NET 10 with a thin WPF shell and WebView2 UI; Windows events and Excel operations remain in C#",
+  "settings": {
+    "location": "Modal opened from the top-right Settings button; no sidebar",
+    "tabs": ["Időszámítás", "Excel", "Megjelenítés"],
+    "languages": ["hu", "en"],
+    "themes": ["auto", "dark", "light"],
+    "editing": "Draft changes; Save applies, Cancel or Escape discards"
+  },
+  "acceptedUx": {
+    "workSegments": "Always visible on each daily card with label Munkaszakaszok:; recompute immediately after lunch changes",
+    "dayStatus": "Distinguish ongoing, complete and incomplete days; exclude ongoing and incomplete days from automatic append",
+    "singleValueCopy": "Click selects the complete value; copying shows brief non-modal feedback",
+    "lunchUndo": "Immediate manual pair selection with Undo and return to automatic estimate",
+    "pendingCounts": "Show pending day count, new row count and unfinished existing row count beside Excel actions",
+    "rememberView": "Remember font size, native window bounds, expanded days and scroll position; refresh preserves the view",
+    "previewLimit": "Prototype uses sample data and simulates logging/file actions; native window bounds are an implementation requirement"
+  },
+  "date": {
+    "uiAndClipboardFormat": "yyyy.MM.dd",
+    "example": "2026.10.19",
+    "excelNumberFormat": "yyyy.mm.dd",
+    "excelStorage": "Numeric date values, preserving the existing workbook structure"
+  },
+  "time": {
+    "uiFormat": "HH:mm",
+    "uiRounding": "Nearest minute; 30 seconds rounds up, with date rollover",
+    "individualValueCopy": "The displayed value",
+    "largeValueCopyIcon": "A separate copy icon next to the large date and each large time, including both lunch endpoints. Date copies as yyyy.MM.dd; time copies original HH:mm:ss. Direct text selection still copies the displayed rounded value.",
+    "wholeRowClipboardFormat": "HH:mm:ss, preserving source seconds",
+    "automaticDetailsAppend": "Preserve source seconds in numeric Excel time values",
+    "calculations": "Use original timestamps, never rounded presentation values"
+  },
+  "selection": {
+    "allDateAndTimeValues": "Selectable and copyable independently",
+    "nativeControl": "Read-only text inputs for displayed values and editable inputs for settings, hosted in WebView2",
+    "copyShortcuts": ["Ctrl+C", "Ctrl+Insert"],
+    "pasteShortcuts": ["Ctrl+V", "Shift+Insert"],
+    "pasteScope": "Editable settings only; recorded event data remains read-only",
+    "dayExpansion": "Separate arrow button so selecting a date cannot expand or collapse the day",
+    "copyActions": ["Selected text", "Single work segment", "Daily work segments", "All daily summaries", "Raw event list"],
+    "singleWorkSegment": "Copy icon beside every work segment: one headerless TSV row with Date, From and To, preserving seconds. Enabled for finished segments, including finished segments of the current day; unfinished segment copy is disabled.",
+    "dailyWorkSegments": {
+      "buttonLabel": "Munkaszakaszok másolása",
+      "columns": ["Date", "From", "To"],
+      "format": "Headerless TSV with CRLF rows, yyyy.MM.dd dates and exact HH:mm:ss times; paste into Details A-C",
+      "rows": "One row per work section, using the same lunch and split-break rules as Details append",
+      "availability": "Complete, closed days only; ongoing or incomplete days have no final work-segment export"
+    }
+  },
+  "existingRules": {
+    "maximumHistoryDays": 60,
+    "defaultDayStart": "04:00",
+    "defaultExpectedLunch": "11:30",
+    "defaultMinimumLunchMinutes": 15,
+    "defaultSplitBreakMinutes": 10,
+    "splitRule": "Only breaks strictly longer than the configured threshold split work rows; shorter breaks count as work",
+    "manualLunch": "A chosen complete lock/unlock pair always gets excluded from work time, even below the split threshold",
+    "preserveManualLunch": "Changes to automatic lunch parameters do not overwrite a manual choice",
+    "detailsAppend": "Append days after the last existing date and separately offer completion of an unfinished existing row in preview"
+  }
+}

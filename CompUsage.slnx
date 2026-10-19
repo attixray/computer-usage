@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/CompUsage.Core/CompUsage.Core.csproj" />
+  <Project Path="src/CompUsage.App/CompUsage.App.csproj" />
+  <Project Path="tests/CompUsage.Checks/CompUsage.Checks.csproj" />
+</Solution>

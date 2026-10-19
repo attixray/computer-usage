@@ -1,0 +1,6 @@
+{
+  "name": "computer-usage-ui-checks",
+  "private": true,
+  "scripts": { "test": "node tests/ui-checks.cjs" },
+  "devDependencies": { "linkedom": "0.18.12" }
+}
