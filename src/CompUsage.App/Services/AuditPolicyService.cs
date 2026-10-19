@@ -20,6 +20,12 @@ public sealed class AuditPolicyService
         finally { AuditFree(buffer); }
     }
 
+    public bool? TryIsEnabled()
+    {
+        try { return IsEnabled(); }
+        catch (Win32Exception ex) when (ex.NativeErrorCode is 5 or 1314) { return null; }
+    }
+
     public async Task SetEnabledAsync(bool enabled)
     {
         var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "auditpol.exe"))

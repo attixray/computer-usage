@@ -11,27 +11,38 @@ using CompUsage.Core;
 
 namespace CompUsage.App.Services;
 
-public sealed record BrokerReply(EventReadResult? Data, bool? Logging, string? Error);
+public sealed record BrokerReply(EventReadResult? Data, bool? Logging, string? Error, bool ReadAccessRequired = false);
 public sealed record BrokerRequest(string Operation, string Sid, bool? Enabled = null);
 
 public sealed class SecurityBroker : IDisposable
 {
+    private readonly Func<BrokerRequest, Task<BrokerReply>> execute;
+    private readonly Func<ProcessStartInfo, Process?> launch;
     private readonly string sid = WindowsIdentity.GetCurrent().User!.Value;
     private readonly SemaphoreSlim gate = new(1, 1);
     private NamedPipeServerStream? pipe;
     private StreamReader? reader;
     private StreamWriter? writer;
 
+    public SecurityBroker(Func<BrokerRequest, Task<BrokerReply>>? execute = null, Func<ProcessStartInfo, Process?>? launch = null)
+    {
+        this.execute = execute ?? ExecuteAsync;
+        this.launch = launch ?? Process.Start;
+    }
+
     public async Task<BrokerReply> RequestAsync(string operation, bool? enabled = null, bool verifyConnection = false)
     {
         await gate.WaitAsync();
         try
         {
+            // Read operations always stay in the caller's token, even if an elevated write helper exists.
+            // Only explicit Windows configuration changes may fall back to a UAC helper.
+            if (!verifyConnection && operation is not ("audit" or "grantRead"))
+                return await execute(new(operation, sid, enabled));
             if (pipe is null)
             {
-                try { if (!verifyConnection) return await ExecuteAsync(new(operation, sid, enabled)); }
-                catch (Exception ex) when (ex is UnauthorizedAccessException or System.ComponentModel.Win32Exception
-                    or System.Diagnostics.Eventing.Reader.EventLogException) { }
+                try { if (!verifyConnection) return await execute(new(operation, sid, enabled)); }
+                catch (Exception ex) when (IsAccessDenied(ex)) { }
                 catch (IOException) when (operation == "audit") { }
                 var name = "CompUsage-" + Guid.NewGuid().ToString("N");
                 // CurrentUserOnly also compares token ownership/elevation on Windows. Use an explicit
@@ -47,7 +58,7 @@ public sealed class SecurityBroker : IDisposable
                     UseShellExecute = true, Verb = verifyConnection ? "" : "runas", WindowStyle = ProcessWindowStyle.Hidden,
                     Arguments = $"--broker {name} {Environment.ProcessId}"
                 };
-                using var helper = Process.Start(start) ?? throw new IOException("Nem indult el a Windows-napló segédje.");
+                using var helper = launch(start) ?? throw new IOException("Nem indult el a Windows-napló segédje.");
                 using var connectTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
                 await pipe.WaitForConnectionAsync(connectTimeout.Token);
                 if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var clientId) || clientId != helper.Id)
@@ -101,14 +112,22 @@ public sealed class SecurityBroker : IDisposable
             case "ping": return new(null, null, null);
             case "read":
                 var now = DateTimeOffset.UtcNow;
-                var data = await Task.Run(() => new SecurityEventService().Read(request.Sid, now.AddDays(-61), now));
-                return new(data, policy.IsEnabled(), null);
+                EventReadResult? data;
+                try { data = await Task.Run(() => new SecurityEventService().Read(request.Sid, now.AddDays(-61), now)); }
+                catch (Exception ex) when (IsAccessDenied(ex)) { return new(null, policy.TryIsEnabled(), null, true); }
+                return new(data, policy.TryIsEnabled(), null);
+            case "grantRead":
+                new ReadAccessService().Grant(request.Sid);
+                return new(null, policy.TryIsEnabled(), null);
             case "audit" when request.Enabled is not null:
                 await policy.SetEnabledAsync(request.Enabled.Value);
                 return new(null, policy.IsEnabled(), null);
             default: throw new InvalidOperationException("Ismeretlen Windows-művelet.");
         }
     }
+    private static bool IsAccessDenied(Exception ex) => ex is UnauthorizedAccessException
+        or System.ComponentModel.Win32Exception { NativeErrorCode: 5 or 1300 or 1314 }
+        || ex is System.Diagnostics.Eventing.Reader.EventLogException && (ex.HResult & 0xffff) is 5 or 1314;
     private void Disconnect() { writer?.Dispose(); reader?.Dispose(); pipe?.Dispose(); writer = null; reader = null; pipe = null; }
     public void Dispose() { Disconnect(); gate.Dispose(); }
 

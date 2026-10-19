@@ -15,6 +15,8 @@
     "dayStatus": "Distinguish ongoing, complete and incomplete days; exclude ongoing and incomplete days from automatic append",
     "singleValueCopy": "Click selects the complete value; copying shows brief non-modal feedback. Values align right and copy icons sit close to the text.",
     "disabledLoggingWarning": "When Windows logging is OFF, show a prominent top warning explaining that new lock/unlock events cannot be tracked. Clicking opens the Time rules settings tab; support Hungarian and English.",
+    "readPermissions": "Startup and refresh never elevate. Missing Security-log access shows saved data and a warning. An explicit Time rules action can request UAC to delegate only account read access to Security and audit-policy queries; disclose the full-log scope. Unknown policy status is not treated as disabled.",
+    "nativeCaption": "Native Windows titlebar follows the chosen theme, including live preview and Cancel restoration; Auto follows OS changes and high contrast keeps system colors.",
     "lunchUndo": "Immediate manual pair selection with Undo and return to automatic estimate",
     "pendingCounts": "Show pending day count, new row count and unfinished existing row count beside Excel actions",
     "rememberView": "Remember font size, native window bounds, expanded days and scroll position; refresh preserves the view",

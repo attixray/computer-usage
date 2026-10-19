@@ -4,14 +4,14 @@ Unicode true
 !include "x64.nsh"
 
 Name "CompUsage"
-OutFile "..\artifacts\release\CompUsage-1.0.3-Setup-x64.exe"
+OutFile "..\artifacts\release\CompUsage-1.0.4-Setup-x64.exe"
 InstallDir "$LOCALAPPDATA\Programs\CompUsage"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-VIProductVersion "1.0.3.0"
+VIProductVersion "1.0.4.0"
 VIAddVersionKey "ProductName" "CompUsage"
 VIAddVersionKey "FileDescription" "CompUsage Setup"
-VIAddVersionKey "FileVersion" "1.0.3"
+VIAddVersionKey "FileVersion" "1.0.4"
 VIAddVersionKey "LegalCopyright" "CompUsage contributors"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\CompUsage.exe"
@@ -82,7 +82,7 @@ Section "CompUsage"
   CreateShortcut "$SMPROGRAMS\CompUsage\CompUsage.lnk" "$INSTDIR\CompUsage.exe"
   CreateShortcut "$SMPROGRAMS\CompUsage\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayName" "CompUsage"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayVersion" "1.0.3"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayVersion" "1.0.4"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayIcon" "$INSTDIR\CompUsage.exe"

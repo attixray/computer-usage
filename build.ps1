@@ -16,6 +16,7 @@ function Invoke-Checked([string]$File, [string[]]$Arguments) {
 Invoke-Checked 'dotnet' @('restore', 'CompUsage.slnx', '--source', 'https://api.nuget.org/v3/index.json', '-r', 'win-x64', '-p:SelfContained=true')
 if (-not $SkipTests) {
     Invoke-Checked 'dotnet' @('run', '--project', 'tests\CompUsage.Checks', '-c', 'Release', '--no-restore')
+    Invoke-Checked 'dotnet' @('run', '--project', 'tests\CompUsage.WindowsChecks', '-c', 'Release', '--no-restore')
     Invoke-Checked 'npm.cmd' @('ci', '--cache', 'artifacts\npm-cache')
     Invoke-Checked 'npm.cmd' @('test')
 }
@@ -80,5 +81,5 @@ foreach ($directory in Get-ChildItem -LiteralPath $publishDirectory -Directory -
 [System.IO.File]::WriteAllLines((Join-Path $projectRoot 'installer\uninstall-files.nsh'), $uninstallLines, [System.Text.UTF8Encoding]::new($false))
 if (-not $SkipTests) { & (Join-Path $projectRoot 'tests\installer-monitor-check.ps1') -ProjectRoot $projectRoot }
 Invoke-Checked $compiler @('/WX', '/V2', 'installer\CompUsage.nsi')
-Compress-Archive -Path 'artifacts\publish\*' -DestinationPath 'artifacts\release\CompUsage-1.0.3-portable-x64.zip' -Force
+Compress-Archive -Path 'artifacts\publish\*' -DestinationPath 'artifacts\release\CompUsage-1.0.4-portable-x64.zip' -Force
 Get-ChildItem -LiteralPath $releaseDirectory -File | Get-FileHash -Algorithm SHA256 | Format-Table

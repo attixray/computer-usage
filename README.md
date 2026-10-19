@@ -10,6 +10,7 @@ A local Windows work-log application based on the current user's lock and unlock
 - Large, selectable dates/times; exact-second copy icons; individual section and whole-day copying as headerless Date/From/To TSV.
 - Ctrl+C / Ctrl+Insert and Ctrl+V / Shift+Insert. Display follows the workbook's date/time formats and Windows regional separators. Hidden seconds are not rounded; copy icons and Excel writing preserve original seconds.
 - Hungarian and English UI; system, dark, and light themes.
+- Native caption colors follow the selected theme, preview changes live and restore on Cancel. Windows 11 caption colors match the interface; older Windows versions keep their supported system rendering. High contrast uses system caption colors.
 - A prominent disabled-logging warning opens the logging settings directly.
 - Settings dialog, remembered font/window size, expanded days, and scroll position.
 - Optional background last-input tracking, disabled by default, with selectable lock-time or last-input endpoints for display, copying and Excel.
@@ -17,11 +18,15 @@ A local Windows work-log application based on the current user's lock and unlock
 
 ## Install and run
 
-Run `CompUsage-1.0.3-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
+Run `CompUsage-1.0.4-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
 
 Setup registers a per-user Windows sign-in entry for the background collector and invokes it independently of the optional UI launch. Tracking defaults to disabled, so the collector exits without sampling until enabled in Settings → Time rules. Once enabled, it runs immediately, survives closing the window and starts again at subsequent sign-ins without opening the app. Disabling tracking stops it; the startup entry remains but exits immediately while disabled. Upgrade and uninstall stop the collector before replacing/removing its files; uninstall removes the startup entry and keeps saved data. The portable build can collect after enabling it in Settings, but Setup is needed to register automatic startup.
 
-The application runs as the current user. When Security-log permissions require it, Windows asks to elevate a narrowly scoped helper for that application session. Approve it using the same Windows account. The helper only reads that user's lock/unlock events and queries or changes the corresponding audit subcategory; the UI and workbook operations remain unelevated.
+The application runs as the current user. Opening the app and refreshing never request UAC or start an elevated reader. If the Security log cannot be read, the app keeps showing saved data with a permission warning. An inaccessible audit-policy query is shown as unknown rather than disabled, and ordinary settings saves preserve that unknown state.
+
+Settings → Time rules → Set up read access is an explicit, one-time Windows permission change. Approve its UAC prompt using the same Windows account. It grants that account read access to the **entire Security event log** (`EVT_READ_ACCESS`, 0x1) and system audit-policy queries (`AUDIT_QUERY_SYSTEM_POLICY`, 0x2). It does not grant log clearing, audit modification, administrator membership or a persistent security privilege. The app still processes only that user's 4800/4801 events. Existing ACL entries are preserved; explicit denies are not overridden. These account permissions persist across app upgrades/uninstall, and company policy can deny or revoke them. No installer or startup path applies this permission change automatically.
+
+Changing Windows lock/unlock auditing can also request UAC when the current token lacks the required rights. The elevated helper is limited to explicitly requested Windows configuration operations; UI, activity collection, reading and workbook operations stay unelevated. After read access is configured, refresh always verifies it with the main process's normal token.
 
 In Settings → Excel, select your `.xlsx` workbook. The `Details` worksheet must have Date, From, To, Duration, Duration (H), Details in columns A–F. Close the workbook in Excel before saving from CompUsage. An `.xls` file must first be saved as `.xlsx` in Excel.
 
@@ -81,6 +86,8 @@ dotnet run --project src/CompUsage.App
 `CompUsage.exe --verify-install` checks the deployed UI assets and installed WebView2 runtime without opening a window or modifying Windows auditing. Exit 0 means those prerequisites were found; this is not an interactive UI test.
 
 `CompUsage.exe --verify-broker` starts an unelevated helper and checks the authenticated, same-user pipe round trip. It does not read the event log, modify auditing, or display UAC. A real UAC transition still needs an interactive Windows check.
+
+`dotnet run --project tests/CompUsage.WindowsChecks` checks read-only ACL construction, read denial without elevation, explicit write escalation, a real non-elevating Security-log read, and native titlebar API acceptance on a hidden window. It never grants permissions, changes auditing or opens UAC. The actual one-time permission change remains an interactive Windows check.
 
 `CompUsage.exe --verify-activity-monitor` checks disabled-by-default startup, an isolated collector process and heartbeat, duplicate prevention, a synthetic lock notification, graceful stop, and disabled subsequent startup. It uses a temporary journal, does not register startup, change auditing or lock the desktop, and cleans up after itself. The normal build runs it after publishing. A physical lock/unlock cycle and Windows sign-in remain manual end-to-end checks.
 

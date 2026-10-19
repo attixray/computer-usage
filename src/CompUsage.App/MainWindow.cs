@@ -29,11 +29,14 @@ public sealed class MainWindow : Window
     private ExcelDisplay display;
     private IReadOnlyList<ActivityLock> activityLocks = [];
     private object? activityInfo;
+    private readonly WindowTheme windowTheme;
+    private bool readAccessRequired;
     private bool closing;
 
     public MainWindow()
     {
         state = store.Load();
+        windowTheme = new WindowTheme(this, state.Settings.Theme);
         workbook = new WorkbookService(TimeZoneInfo.Local, excelCulture);
         display = new ExcelDisplay(new WorkbookFormats(), excelCulture, TimeZoneInfo.Local);
         Title = state.Settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
@@ -64,7 +67,7 @@ public sealed class MainWindow : Window
                 store.Save(state);
             }
             catch (Exception ex) { MessageBox.Show(ex.Message, state.Settings.Language == "en" ? "Could not save the view" : "A nézet mentése nem sikerült"); }
-            broker.Dispose(); view.Dispose();
+            windowTheme.Dispose(); broker.Dispose(); view.Dispose();
         };
     }
 
@@ -118,7 +121,7 @@ public sealed class MainWindow : Window
         catch (Exception ex)
         {
             var error = ex is System.ComponentModel.Win32Exception { NativeErrorCode: 1223 }
-                ? "A Windows-jóváhagyás elmaradt. A Frissítés gombbal újra próbálhatod." : ex.Message;
+                ? "A Windows-jóváhagyás elmaradt. A kért beállítás módosítása nem történt meg." : ex.Message;
             if (!closing) view.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { id, ok = false, error }, Json));
         }
         finally { gate.Release(); }
@@ -159,9 +162,13 @@ public sealed class MainWindow : Window
                 try
                 {
                     var reply = await broker.RequestAsync("read");
-                    var read = reply.Data!;
-                    state.Events = state.Events.Concat(read.Events).DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ToList();
-                    state.OldestAvailable = read.OldestAvailable; state.LastRefresh = DateTimeOffset.Now;
+                    var read = reply.Data;
+                    readAccessRequired = reply.ReadAccessRequired;
+                    if (read is not null)
+                    {
+                        state.Events = state.Events.Concat(read.Events).DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ToList();
+                        state.OldestAvailable = read.OldestAvailable; state.LastRefresh = DateTimeOffset.Now;
+                    }
                     RecordLogging(reply.Logging);
                     lastError = null; store.Save(state);
                 }
@@ -184,7 +191,13 @@ public sealed class MainWindow : Window
                 }
                 ReadActivity();
                 Title = settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
+                windowTheme.Set(settings.Theme);
                 await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "previewTheme":
+                windowTheme.Set(data.GetProperty("theme").GetString()!); return true;
+            case "grantReadAccess":
+                await broker.RequestAsync("grantRead");
+                return await DispatchAsync("refresh", default);
             case "startActivity":
                 await ActivityMonitor.StartAndWaitAsync(); ReadActivity(); return Snapshot();
             case "history":
@@ -290,6 +303,7 @@ public sealed class MainWindow : Window
     private object Snapshot() => new
     {
         settings = state.Settings, logging = state.Logging, error = lastError, activity = activityInfo,
+        permissions = new { readAccessRequired },
         user = Environment.UserName, refreshed = state.LastRefresh?.ToLocalTime().ToString("yyyy.MM.dd HH:mm:ss", CultureInfo.InvariantCulture),
         oldest = state.OldestAvailable?.ToLocalTime().ToString("yyyy.MM.dd HH:mm", CultureInfo.InvariantCulture),
         workbook = workbookInfo, expanded = state.Settings.RememberView ? state.Expanded : [], scroll = state.Settings.RememberView ? state.Scroll : 0,

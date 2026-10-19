@@ -2,6 +2,12 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'A Windows Security napló olvasásához nincs jogosultság.':'Windows Security log read access is missing.',
+    'A mentett adatok látszanak, de a napló nem frissült. Az egyszeri olvasási beállítás után a frissítés nem kér rendszergazdai jogot.':'Saved data is shown, but the log was not refreshed. After one-time read-access setup, refreshing does not request administrator rights.',
+    'Olvasási jogosultság beállítása':'Set up read access',
+    'Egyszeri Windows-jóváhagyás: a fiókod olvasási jogot kap a teljes Security naplóhoz és az auditállapothoz. Naplótörlési vagy auditmódosítási jogot nem kap. A CompUsage csak a saját lock/unlock eseményeidet dolgozza fel.':'One-time Windows approval grants your account read access to the entire Security log and audit status. It does not grant log-clearing or audit-changing rights. CompUsage processes only your own lock/unlock events.',
+    'A napló továbbra sem olvasható.':'The log still cannot be read.','Olvasási jogosultság beállítva':'Read access configured',
+    'A Windows-házirend kifejezetten tiltja ezt az olvasási jogot.':'Windows policy explicitly denies this read permission.',
     'Utolsó aktivitás':'Last input','Utolsó aktivitás zárolás előtt':'Last input before lock','Szakasz vége':'Section end',
     'Inaktivitás:':'Idle time:','Inaktivitás zárolás előtt':'Idle time before lock','Nincs aktivitási adat':'No activity data',
     'Aktivitás alapján':'Based on last input','Zárolás alapján':'Based on lock time',
@@ -67,7 +73,7 @@ window.i18n = (() => {
     'Hiányoznak az Excel cellastílusai.':'The Excel cell styles are missing.','Érvénytelen megkezdett sor.':'Invalid unfinished row.',
     'Nincs mentendő sor.':'There are no rows to save.','Az Excel-fájl az előnézet óta megváltozott. Kérj új előnézetet.':'The workbook changed after the preview. Generate a new preview.',
     'Az előnézet lejárt. Kérj új előnézetet.':'The preview has expired. Generate a new preview.','A beállított .xlsx fájl nem található.':'The selected .xlsx workbook was not found.',
-    'A Windows-jóváhagyás elmaradt. A Frissítés gombbal újra próbálhatod.':'Windows approval was cancelled. Use Refresh to try again.',
+    'A Windows-jóváhagyás elmaradt. A kért beállítás módosítása nem történt meg.':'Windows approval was cancelled. The requested setting was not changed.',
     'A segédet ugyanazzal a Windows-fiókkal kell jóváhagyni.':'Approve the helper using the same Windows account.',
     'A Windows-segéd leállt.':'The Windows helper stopped.','Nem indult el a Windows-napló segédje.':'The Windows event-log helper could not start.'
     ,'Nem a várt Windows-segéd kapcsolódott.':'An unexpected process connected instead of the Windows helper.'
