@@ -18,18 +18,22 @@ public sealed class MainWindow : Window
     private readonly LocalStore store = new();
     private readonly LocalState state;
     private readonly SecurityBroker broker = new();
-    private readonly WorkbookService workbook = new(TimeZoneInfo.Local);
+    private readonly CultureInfo excelCulture = WindowsRegionalCulture.Create();
+    private readonly WorkbookService workbook;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, string?> undo = [];
     private WorkbookPlan? activePlan;
     private string? planToken;
     private string? lastError;
     private object? workbookInfo;
+    private ExcelDisplay display;
     private bool closing;
 
     public MainWindow()
     {
         state = store.Load();
+        workbook = new WorkbookService(TimeZoneInfo.Local, excelCulture);
+        display = new ExcelDisplay(new WorkbookFormats(), excelCulture, TimeZoneInfo.Local);
         Title = state.Settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
         MinWidth = 600; MinHeight = 480;
         Width = state.Settings.RememberView ? state.Width : 1180;
@@ -219,23 +223,30 @@ public sealed class MainWindow : Window
         {
             var reports = Reports();
             var plan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, reports));
-            workbookInfo = new { available = true, lastDate = plan.LastDate?.ToString("yyyy.MM.dd", CultureInfo.InvariantCulture),
+            display = new ExcelDisplay(plan.Formats, excelCulture, TimeZoneInfo.Local);
+            workbookInfo = new { available = true, lastDate = plan.LastDate is { } date ? display.Date(date) : null,
                 days = plan.Rows.Select(r => r.Date).Distinct().Count(), rows = plan.Rows.Count, partials = plan.Partials.Count, error = (string?)null };
         }
-        catch (Exception ex) { workbookInfo = new { available = false, error = ex.Message }; }
+        catch (Exception ex)
+        {
+            display = new ExcelDisplay(new WorkbookFormats(), excelCulture, TimeZoneInfo.Local);
+            workbookInfo = new { available = false, error = ex.Message };
+        }
     }
 
-    private static object? TimeValue(DateTimeOffset? time) => time is null ? null : new
+    private object? TimeValue(DateTimeOffset? time, bool end = false) => time is null ? null : new
     {
-        display = Presentation.Time(time.Value, TimeZoneInfo.Local),
+        display = display.Time(time.Value, end),
         exact = Presentation.Time(time.Value, TimeZoneInfo.Local, true),
-        date = TimeZoneInfo.ConvertTime(Presentation.RoundMinute(time.Value), TimeZoneInfo.Local).ToString("yyyy.MM.dd", CultureInfo.InvariantCulture)
+        date = display.Date(DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(time.Value, TimeZoneInfo.Local).DateTime))
     };
-    private static object RowSnapshot(WorkInterval row) => new { date = Presentation.Date(row.Date), from = TimeValue(row.From),
-        to = TimeValue(row.To), duration = Duration(row.Duration), open = row.Open, copy = Presentation.CopyRow(row, TimeZoneInfo.Local) };
-    private static string Duration(TimeSpan duration) => $"{(int)Math.Round(duration.TotalMinutes) / 60:00}:{(int)Math.Round(duration.TotalMinutes) % 60:00}";
-    private static object PlanSnapshot(WorkbookPlan plan, string token) => new { token, rows = plan.Rows.Select(RowSnapshot),
-        partials = plan.Partials.Select(p => new { row = p.Row, section = RowSnapshot(p.Interval) }) };
+    private object RowSnapshot(WorkInterval row) => new { date = display.Date(row.Date), from = TimeValue(row.From),
+        to = TimeValue(row.To, true), duration = display.Duration(row.Duration), open = row.Open, copy = display.CopyRow(row) };
+    private object PlanSnapshot(WorkbookPlan plan, string token)
+    {
+        display = new ExcelDisplay(plan.Formats, excelCulture, TimeZoneInfo.Local);
+        return new { token, rows = plan.Rows.Select(RowSnapshot), partials = plan.Partials.Select(p => new { row = p.Row, section = RowSnapshot(p.Interval) }) };
+    }
 
     private object Snapshot() => new
     {
@@ -245,16 +256,16 @@ public sealed class MainWindow : Window
         workbook = workbookInfo, expanded = state.Settings.RememberView ? state.Expanded : [], scroll = state.Settings.RememberView ? state.Scroll : 0,
         days = Reports().Select(d => new
         {
-            key = d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), date = Presentation.Date(d.Date),
+            key = d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), date = display.Date(d.Date),
             weekday = d.Date.ToString("dddd", CultureInfo.GetCultureInfo("hu-HU")), status = d.Status, ongoing = d.Ongoing,
-            incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.Timestamp),
+            incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.Timestamp, true),
             manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
-            lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.Timestamp), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)Math.Round(d.Lunch.Duration.TotalMinutes) },
-            pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.Timestamp), to = TimeValue(p.Unlock.Timestamp), minutes = (int)Math.Round(p.Duration.TotalMinutes) }),
+            lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.Timestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },
+            pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.Timestamp, true), to = TimeValue(p.Unlock.Timestamp), minutes = (int)p.Duration.TotalMinutes }),
             sections = d.Sections.Select(RowSnapshot),
-            copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(s => Presentation.CopyRow(s, TimeZoneInfo.Local))) : "",
+            copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(display.CopyRow)) : "",
             eventCopy = "Dátum\tIdőpont\tEsemény\tAzonosító\r\n" + string.Join("\r\n", d.Events.Select(e => $"{TimeZoneInfo.ConvertTime(e.Timestamp, TimeZoneInfo.Local):yyyy.MM.dd}\t{Presentation.Time(e.Timestamp, TimeZoneInfo.Local, true)}\t{e.Label}\t{e.EventId}")),
-            events = d.Events.Select(e => new { time = TimeValue(e.Timestamp), label = e.Label, eventId = e.EventId })
+            events = d.Events.Select(e => new { time = TimeValue(e.Timestamp, e.EventId == 4800), label = e.Label, eventId = e.EventId })
         })
     };
 }

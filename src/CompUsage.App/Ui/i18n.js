@@ -35,6 +35,7 @@ window.i18n = (() => {
     'Nézet megjegyzése':'Remember view','Betűméret, ablakméret, nyitott napok és görgetési helyzet.':'Font size, window bounds, expanded days and scroll position.',
     'Nyelv':'Language','Magyar':'Hungarian','Angol':'English','Téma':'Theme','OS követése':'Follow OS','Sötét':'Dark','Világos':'Light',
     'Másolva':'Copied','Napló frissítve':'Event log refreshed','Beállítások elmentve':'Settings saved','Nem sikerült a betöltés':'Unable to load',
+    'Megjelenítés az Excel formátuma szerint · másoláskor pontos időpontok':'Display follows Excel formatting · copying preserves exact times',
     'Nincs másolható, lezárt munkanap.':'There are no completed days to copy.','Az időpont formátuma ÓÓ:PP legyen.':'Use the HH:mm time format.',
     'A művelet nem válaszolt. Próbáld újra.':'The operation did not respond. Please try again.',
     'Hiányos':'Incomplete','Folyamatban':'In progress','Lezárt':'Complete',

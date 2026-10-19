@@ -92,7 +92,7 @@ public static class Presentation
         ((value.UtcTicks + TimeSpan.TicksPerSecond * 30) / TimeSpan.TicksPerMinute) * TimeSpan.TicksPerMinute, TimeSpan.Zero);
     public static string Date(DateOnly date) => date.ToString("yyyy.MM.dd", CultureInfo.InvariantCulture);
     public static string Time(DateTimeOffset value, TimeZoneInfo zone, bool seconds = false) =>
-        TimeZoneInfo.ConvertTime(seconds ? value : RoundMinute(value), zone).ToString(seconds ? "HH:mm:ss" : "HH:mm", CultureInfo.InvariantCulture);
+        TimeZoneInfo.ConvertTime(value, zone).ToString(seconds ? "HH:mm:ss" : "H:mm", CultureInfo.InvariantCulture);
     public static string CopyRow(WorkInterval row, TimeZoneInfo zone) =>
         string.Join('\t', Date(row.Date), Time(row.From, zone, true), Time(row.To, zone, true));
 }

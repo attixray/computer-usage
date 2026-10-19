@@ -21,19 +21,19 @@
     "previewLimit": "Prototype uses sample data and simulates logging/file actions; native window bounds are an implementation requirement"
   },
   "date": {
-    "uiAndClipboardFormat": "yyyy.MM.dd",
+    "uiAndClipboardFormat": "Follow the selected workbook's Details date format and Windows regional separators",
     "example": "2026.10.19",
-    "excelNumberFormat": "yyyy.mm.dd",
+    "excelNumberFormat": "Preserve or inherit existing target cell/row/column formats",
     "excelStorage": "Numeric date values, preserving the existing workbook structure"
   },
   "time": {
-    "uiFormat": "HH:mm",
-    "uiRounding": "Nearest minute; 30 seconds rounds up, with date rollover",
+    "uiFormat": "Follow Details From/To formats, including leading-zero and seconds rules",
+    "uiRounding": "No rounding for display: 08:01:37 displays as 8:01 under h:mm, matching Excel",
     "individualValueCopy": "The displayed value",
-    "largeValueCopyIcon": "A separate copy icon next to the large date and each large time, including both lunch endpoints. Date copies as yyyy.MM.dd; time copies original HH:mm:ss. Direct text selection still copies the displayed rounded value.",
+    "largeValueCopyIcon": "A separate copy icon next to the large date and each large time, including both lunch endpoints. Date copies in the workbook date format; time copies original HH:mm:ss. Direct text selection copies the displayed Excel-formatted value.",
     "wholeRowClipboardFormat": "HH:mm:ss, preserving source seconds",
     "automaticDetailsAppend": "Preserve source seconds in numeric Excel time values",
-    "calculations": "Use original timestamps, never rounded presentation values"
+    "calculations": "Use original timestamps, never formatted display text"
   },
   "selection": {
     "allDateAndTimeValues": "Selectable and copyable independently",
@@ -47,7 +47,7 @@
     "dailyWorkSegments": {
       "buttonLabel": "Munkaszakaszok másolása",
       "columns": ["Date", "From", "To"],
-      "format": "Headerless TSV with CRLF rows, yyyy.MM.dd dates and exact HH:mm:ss times; paste into Details A-C",
+      "format": "Headerless TSV with CRLF rows, workbook-formatted dates and exact HH:mm:ss times; paste into Details A-C",
       "rows": "One row per work section, using the same lunch and split-break rules as Details append",
       "availability": "Complete, closed days only; ongoing or incomplete days have no final work-segment export"
     }

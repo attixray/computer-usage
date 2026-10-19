@@ -7,10 +7,10 @@ namespace CompUsage.Core;
 
 public sealed record PartialRow(int Row, WorkInterval Interval);
 public sealed record WorkbookPlan(string Path, string Fingerprint, DateOnly? LastDate,
-    IReadOnlyList<WorkInterval> Rows, IReadOnlyList<PartialRow> Partials, int LastRow, bool Date1904);
+    IReadOnlyList<WorkInterval> Rows, IReadOnlyList<PartialRow> Partials, int LastRow, bool Date1904, WorkbookFormats Formats);
 
 // Update Details and its style/calculation metadata while preserving unrelated workbook parts.
-public sealed class WorkbookService(TimeZoneInfo zone)
+public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = null)
 {
     private static readonly XNamespace Ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
     private static readonly XNamespace Rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -30,6 +30,7 @@ public sealed class WorkbookService(TimeZoneInfo zone)
         var lastDate = dated.Select(r => r.Date).Max();
         var lastRow = SheetRows(sheet).Where(r => r.Elements(Ns + "c").Any(c => Column(c) is "A" or "B" or "C" or "F"
             && !string.IsNullOrWhiteSpace(Text(c, strings)))).Select(RowNumber).DefaultIfEmpty(1).Max();
+        var formats = ReadFormats(sheet, ReadXml(zip, "xl/styles.xml"), lastRow);
         var rows = days.Where(d => !d.Ongoing && !d.Incomplete && (lastDate is null || d.Date > lastDate))
             .OrderBy(d => d.Date).SelectMany(d => d.Sections).ToArray();
         var partials = new List<PartialRow>();
@@ -40,6 +41,8 @@ public sealed class WorkbookService(TimeZoneInfo zone)
             if (from is null) continue;
             var candidates = days.Where(d => d.Date == date && !d.Ongoing && !d.Incomplete).SelectMany(d => d.Sections)
                 .Where(s => Math.Abs((TimeZoneInfo.ConvertTime(s.From, zone).TimeOfDay - from.Value).TotalSeconds) < 1
+                    || TimeZoneInfo.ConvertTime(s.From, zone).TimeOfDay.Ticks / TimeSpan.TicksPerMinute == from.Value.Ticks / TimeSpan.TicksPerMinute
+                       && Math.Abs(from.Value.TotalSeconds % 60) < 0.001
                     || Math.Abs((TimeZoneInfo.ConvertTime(Presentation.RoundMinute(s.From), zone).TimeOfDay - from.Value).TotalMilliseconds) < 1).ToArray();
             if (candidates.Length == 1)
             {
@@ -49,7 +52,7 @@ public sealed class WorkbookService(TimeZoneInfo zone)
                 if (existingFrom < candidate.To) partials.Add(new(RowNumber(row), candidate with { From = existingFrom }));
             }
         }
-        return new(Path.GetFullPath(path), Convert.ToHexString(SHA256.HashData(bytes)), lastDate, rows, partials, lastRow, date1904);
+        return new(Path.GetFullPath(path), Convert.ToHexString(SHA256.HashData(bytes)), lastDate, rows, partials, lastRow, date1904, formats);
     }
 
     public string Commit(WorkbookPlan plan, IReadOnlyCollection<int> selectedPartials)
@@ -93,7 +96,7 @@ public sealed class WorkbookService(TimeZoneInfo zone)
                     Set(row, "C", index, LocalFraction(interval.To), template);
                     Set(row, "D", index, interval.Duration.TotalDays, template);
                     Set(row, "E", index, interval.Duration.TotalHours, template);
-                    FormatRow(row, styles, formats, false);
+                    FormatRow(row, sheet, styles, formats, false, plan.Formats);
                 }
                 foreach (var partial in plan.Partials.Where(p => selectedPartials.Contains(p.Row)))
                 {
@@ -102,7 +105,7 @@ public sealed class WorkbookService(TimeZoneInfo zone)
                     // Preserve existing duration formulas; only fill blank duration cells.
                     if (Cell(row, "D")?.Element(Ns + "f") is null) Set(row, "D", partial.Row, partial.Interval.Duration.TotalDays, template);
                     if (Cell(row, "E")?.Element(Ns + "f") is null) Set(row, "E", partial.Row, partial.Interval.Duration.TotalHours, template);
-                    FormatRow(row, styles, formats, true);
+                    FormatRow(row, sheet, styles, formats, true, plan.Formats);
                 }
                 var dimension = sheet.Root.Element(Ns + "dimension");
                 if (dimension is not null)
@@ -224,18 +227,25 @@ public sealed class WorkbookService(TimeZoneInfo zone)
         cell.Add(new XElement(Ns + "v", value.ToString("R", Invariant)));
     }
 
-    private static void FormatRow(XElement row, XDocument styles, Dictionary<(int, string), int> cache, bool partial)
+    private static void FormatRow(XElement row, XDocument sheet, XDocument styles, Dictionary<(int, string), int> cache, bool partial, WorkbookFormats fallback)
     {
         var root = styles.Root!;
         var numbers = root.Element(Ns + "numFmts");
         if (numbers is null) { numbers = new XElement(Ns + "numFmts", new XAttribute("count", 0)); root.AddFirst(numbers); }
         var xfs = root.Element(Ns + "cellXfs") ?? throw new InvalidDataException("Hiányoznak az Excel cellastílusai.");
-        foreach (var (column, format) in new[] { ("A", "yyyy.mm.dd"), ("B", "hh:mm"), ("C", "hh:mm"), ("D", "[h]:mm"), ("E", "0.00") })
+        foreach (var (column, format) in new[] { ("A", fallback.Date), ("B", fallback.Start), ("C", fallback.End), ("D", fallback.Duration), ("E", fallback.Hours) })
         {
             if (partial && column is "A" or "B") continue;
             var cell = Cell(row, column);
             if (cell is null) continue;
-            var oldId = (int?)cell.Attribute("s") ?? 0;
+            var oldId = EffectiveStyle(sheet, row, cell, column);
+            // Keep existing cell/row/column number formats, including built-in regional formats.
+            var existing = xfs.Elements(Ns + "xf").ElementAtOrDefault(oldId);
+            if (((int?)existing?.Attribute("numFmtId") ?? 0) != 0)
+            {
+                if (cell.Attribute("s") is null && oldId != 0) cell.SetAttributeValue("s", oldId);
+                continue;
+            }
             if (!cache.TryGetValue((oldId, format), out var styleId))
             {
                 var number = numbers.Elements(Ns + "numFmt").FirstOrDefault(n => (string?)n.Attribute("formatCode") == format);
@@ -253,4 +263,47 @@ public sealed class WorkbookService(TimeZoneInfo zone)
             cell.SetAttributeValue("s", styleId);
         }
     }
+
+    private static int EffectiveStyle(XDocument sheet, XElement row, XElement? cell, string column)
+    {
+        if (cell?.Attribute("s") is { } cellStyle) return (int)cellStyle;
+        if ((string?)row.Attribute("customFormat") is "1" or "true" && row.Attribute("s") is { } rowStyle) return (int)rowStyle;
+        var index = column.Aggregate(0, (n, c) => n * 26 + c - 'A' + 1);
+        return (int?)sheet.Root!.Element(Ns + "cols")?.Elements(Ns + "col")
+            .LastOrDefault(c => (int?)c.Attribute("min") <= index && (int?)c.Attribute("max") >= index)?.Attribute("style") ?? 0;
+    }
+
+    private WorkbookFormats ReadFormats(XDocument sheet, XDocument styles, int lastRow)
+    {
+        var custom = styles.Root!.Element(Ns + "numFmts")?.Elements(Ns + "numFmt")
+            .ToDictionary(n => (int)n.Attribute("numFmtId")!, n => (string)n.Attribute("formatCode")!) ?? [];
+        var xfs = styles.Root.Element(Ns + "cellXfs")?.Elements(Ns + "xf").ToArray() ?? [];
+        string Find(string column, string fallback)
+        {
+            var ordered = SheetRows(sheet).Where(r => RowNumber(r) > 1 && RowNumber(r) <= lastRow + 1)
+                .OrderByDescending(RowNumber).ToArray();
+            foreach (var row in ordered)
+            {
+                var style = EffectiveStyle(sheet, row, Cell(row, column), column);
+                var id = style >= 0 && style < xfs.Length ? (int?)xfs[style].Attribute("numFmtId") ?? 0 : 0;
+                if (id == 0) continue;
+                if (custom.TryGetValue(id, out var format)) return format;
+                return BuiltInFormat(id, fallback);
+            }
+            // Empty sheets can still carry the intended date/time format in their column styles.
+            var empty = new XElement(Ns + "row");
+            var colStyle = EffectiveStyle(sheet, empty, null, column);
+            var colId = colStyle >= 0 && colStyle < xfs.Length ? (int?)xfs[colStyle].Attribute("numFmtId") ?? 0 : 0;
+            return custom.GetValueOrDefault(colId) ?? BuiltInFormat(colId, fallback);
+        }
+        return new(Find("A", "yyyy/mm/dd"), Find("B", "h:mm"), Find("C", "h:mm"), Find("D", "[h]:mm"), Find("E", "0.00"));
+    }
+
+    private string BuiltInFormat(int id, string fallback) => id switch
+    {
+        14 => (culture ?? CultureInfo.CurrentCulture).DateTimeFormat.ShortDatePattern.Replace('M', 'm'),
+        15 => "d-mmm-yy", 16 => "d-mmm", 17 => "mmm-yy", 18 => "h:mm AM/PM", 19 => "h:mm:ss AM/PM",
+        20 => "h:mm", 21 => "h:mm:ss", 22 => (culture ?? CultureInfo.CurrentCulture).DateTimeFormat.ShortDatePattern.Replace('M', 'm') + " h:mm",
+        45 => "mm:ss", 46 => "[h]:mm:ss", 47 => "mmss.0", 1 => "0", 2 => "0.00", _ => fallback
+    };
 }

@@ -5,4 +5,5 @@
 - [.NET](https://github.com/dotnet/runtime): MIT license and third-party notices included with the self-contained runtime.
 - [NSIS 3.13](https://nsis.sourceforge.io/License): zlib/libpng license for the installer stub; the compiler is a build-time tool.
 - [ClosedXML](https://github.com/ClosedXML/ClosedXML): MIT license. Used only by tests to generate and inspect fixtures; not shipped in the application.
+- [ExcelNumberFormat 1.1.0](https://github.com/andersnm/ExcelNumberFormat): MIT license; renders worksheet number formats in the UI. See `Ui/vendor/ExcelNumberFormat-LICENSE.txt`.
 - [LinkeDOM](https://github.com/WebReflection/linkedom): ISC license. Used only by DOM tests; not shipped in the application.
