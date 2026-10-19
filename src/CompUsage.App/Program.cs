@@ -31,7 +31,7 @@ public static class Program
             try
             {
                 _ = Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();
-                return new[] { "index.html", "app.js", "app.css", "desktop.css", "i18n.js", "vendor/lucide.min.js" }
+                return new[] { "index.html", "app.js", "app.css", "desktop.css", "i18n.js", "vendor/lucide.min.js", "assets/app-icon.png" }
                     .All(file => File.Exists(Path.Combine(AppContext.BaseDirectory, "Ui", file))) ? 0 : 2;
             }
             catch { return 3; }

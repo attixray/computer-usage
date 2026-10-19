@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using CompUsage.App.Services;
 using CompUsage.Core;
 using Microsoft.Web.WebView2.Core;
@@ -40,6 +41,7 @@ public sealed class MainWindow : Window
         workbook = new WorkbookService(TimeZoneInfo.Local, excelCulture);
         display = new ExcelDisplay(new WorkbookFormats(), excelCulture, TimeZoneInfo.Local);
         Title = state.Settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
+        Icon = BitmapFrame.Create(new Uri("pack://application:,,,/Assets/CompUsage.ico"));
         MinWidth = 600; MinHeight = 480;
         Width = state.Settings.RememberView ? state.Width : 1180;
         Height = state.Settings.RememberView ? state.Height : 850;

@@ -13,12 +13,14 @@ A local Windows work-log application based on the current user's lock and unlock
 - Native caption colors follow the selected theme, preview changes live and restore on Cancel. Windows 11 caption colors match the interface; older Windows versions keep their supported system rendering. High contrast uses system caption colors.
 - A prominent disabled-logging warning opens the logging settings directly.
 - Settings dialog, remembered font/window size, expanded days, and scroll position.
+- Settings use the available window height; only overflowing panel content scrolls, while Save and Cancel stay visible.
+- A custom clock-and-lock app icon is included in the executable, native window, interface and installer.
 - Optional background last-input tracking, disabled by default, with selectable lock-time or last-input endpoints for display, copying and Excel.
 - `.xlsx` Details preview, append, optional completion of an unfinished row, backup, and detection of changes after preview.
 
 ## Install and run
 
-Run `CompUsage-1.0.4-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
+Run `CompUsage-1.0.5-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
 
 Setup registers a per-user Windows sign-in entry for the background collector and invokes it independently of the optional UI launch. Tracking defaults to disabled, so the collector exits without sampling until enabled in Settings → Time rules. Once enabled, it runs immediately, survives closing the window and starts again at subsequent sign-ins without opening the app. Disabling tracking stops it; the startup entry remains but exits immediately while disabled. Upgrade and uninstall stop the collector before replacing/removing its files; uninstall removes the startup entry and keeps saved data. The portable build can collect after enabling it in Settings, but Setup is needed to register automatic startup.
 
@@ -91,7 +93,9 @@ dotnet run --project src/CompUsage.App
 
 `CompUsage.exe --verify-activity-monitor` checks disabled-by-default startup, an isolated collector process and heartbeat, duplicate prevention, a synthetic lock notification, graceful stop, and disabled subsequent startup. It uses a temporary journal, does not register startup, change auditing or lock the desktop, and cleans up after itself. The normal build runs it after publishing. A physical lock/unlock cycle and Windows sign-in remain manual end-to-end checks.
 
-The build also runs `tests/installer-monitor-check.ps1`: it compiles the actual NSIS stop macro with a private scope and verifies graceful shutdown of an isolated background collector. It does not install the app or change startup registration.
+The build also runs `tests/installer-monitor-check.ps1`: it compiles the actual NSIS stop macro with a private scope and verifies graceful shutdown of an isolated background collector. It also round-trips the production message strings through a compiled Unicode installer to check Hungarian accents. It does not install the app or change startup registration. NSIS is invoked with `/INPUTCHARSET UTF8`; the main script also has a UTF-8 BOM for direct compiler invocation.
+
+The icon artwork and generation prompt are documented in [design/app-icon-prompt.md](design/app-icon-prompt.md). To rebuild the checked-in ICO and UI PNG from the original artwork on Windows, run `dotnet run --project tools/CompUsage.IconBuilder -- src/CompUsage.App/Assets/app-icon-source.png src/CompUsage.App/Assets/CompUsage.ico src/CompUsage.App/Ui/assets/app-icon.png`. The normal build consumes the checked-in assets and does not generate artwork.
 
 ## Structure
 

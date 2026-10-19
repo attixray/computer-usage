@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.AccessControl;
+using System.Resources;
 using System.Windows.Interop;
+using System.Windows.Media.Imaging;
 using CompUsage.App.Services;
 
 internal static class Program
@@ -63,6 +65,16 @@ internal static class Program
                 using var broker = new SecurityBroker(launch: _ => throw new Exception("Read attempted UAC."));
                 var result = broker.RequestAsync("read").GetAwaiter().GetResult();
                 Require(result.Data is not null || result.ReadAccessRequired);
+            });
+            Check("The application embeds a decodable small and large Windows icon", () =>
+            {
+                using var resources = typeof(CompUsage.App.MainWindow).Assembly.GetManifestResourceStream("CompUsage.g.resources")
+                    ?? throw new Exception("Application resources are missing.");
+                using var reader = new ResourceReader(resources);
+                var entry = reader.Cast<System.Collections.DictionaryEntry>().Single(e => (string)e.Key == "assets/compusage.ico");
+                using var source = (System.IO.Stream)entry.Value!;
+                var icon = new IconBitmapDecoder(source, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+                Require(icon.Frames.Any(f => f.PixelWidth == 16) && icon.Frames.Any(f => f.PixelWidth == 256));
             });
             Check("Windows accepts light, dark and high-contrast native caption settings", () =>
             {

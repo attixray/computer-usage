@@ -17,11 +17,18 @@ try {
     $taskMacro = $taskMacro.Replace('Local\CompUsage.Activity.', "Local\CompUsage.Activity.Test.$taskScope.")
     $taskScript = Join-Path $taskDirectory 'stop-check.nsi'
     $taskStopper = Join-Path $taskDirectory 'stop-check.exe'
+    $taskMessages = @([regex]::Matches($taskInstaller, '(?m)^\s*MessageBox[^\r\n]*"([^"\r\n]*)"\s*$') | ForEach-Object { $_.Groups[1].Value })
+    if (-not ($taskMessages | Where-Object { $_ -match '[^\x00-\x7F]' })) { throw 'No localized installer messages were found.' }
+    $taskEncodedText = Join-Path $taskDirectory 'compiled-messages.txt'
+    $taskTextCommands = @('  FileOpen $4 "' + $taskEncodedText + '" w')
+    foreach ($taskMessage in $taskMessages) { $taskTextCommands += '  FileWriteUTF16LE $4 "' + $taskMessage + '$\r$\n"' }
+    $taskTextCommands += '  FileClose $4'
     $taskSource = @('Unicode true', 'RequestExecutionLevel user', 'SilentInstall silent',
         ('OutFile "' + $taskStopper + '"'), '!include "LogicLib.nsh"', $taskMacro,
-        'Section', '  !insertmacro StopActivityMonitor', 'SectionEnd') -join [Environment]::NewLine
+        'Section', '  !insertmacro StopActivityMonitor') + $taskTextCommands + @('SectionEnd')
+    $taskSource = $taskSource -join [Environment]::NewLine
     [System.IO.File]::WriteAllText($taskScript, $taskSource, [System.Text.UTF8Encoding]::new($false))
-    & $taskCompiler /WX /V2 $taskScript
+    & $taskCompiler /INPUTCHARSET UTF8 /WX /V2 $taskScript
     if ($LASTEXITCODE -ne 0) { throw 'The isolated installer-stop check did not compile.' }
     $taskChild = Start-Process -FilePath $taskApp -ArgumentList @('--activity-monitor-check', ('"' + $taskDirectory + '"')) -WindowStyle Hidden -PassThru
     $taskDeadline = [System.Diagnostics.Stopwatch]::StartNew()
@@ -39,6 +46,10 @@ try {
     $taskSaved = Get-Content -LiteralPath $taskStatus.FullName -Raw | ConvertFrom-Json
     if (-not $taskSaved.StoppedAt) { throw 'The collector did not save its graceful-stop marker.' }
     Write-Output 'PASS Installer stop macro shuts down an independently running collector without the main UI.'
+    $taskDecodedText = [System.IO.File]::ReadAllText($taskEncodedText, [System.Text.Encoding]::Unicode)
+    $taskExpectedText = ($taskMessages -join "`r`n") + "`r`n"
+    if ($taskDecodedText -cne $taskExpectedText) { throw 'Compiled installer messages did not preserve their Unicode characters.' }
+    Write-Output 'PASS Compiled installer preserves the localized message text, including Hungarian accents.'
 } finally {
     if ($taskChild) {
         if (-not $taskChild.HasExited) { $taskChild.Kill(); $taskChild.WaitForExit() }

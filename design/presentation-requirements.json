@@ -5,6 +5,7 @@
   "technology": "C# / .NET 10 with a thin WPF shell and WebView2 UI; Windows events and Excel operations remain in C#",
   "settings": {
     "location": "Modal opened from the top-right Settings button; no sidebar",
+    "sizing": "Use available viewport height with 16px outer margins; scroll panel content only when needed and keep Save/Cancel visible",
     "tabs": ["Időszámítás", "Excel", "Megjelenítés"],
     "languages": ["hu", "en"],
     "themes": ["auto", "dark", "light"],
