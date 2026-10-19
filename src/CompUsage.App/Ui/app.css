@@ -30,17 +30,17 @@
 #compusage-cards-preview .cu-section{margin-bottom:10px;font-size:.83em;color:var(--cu-muted)}
 #compusage-cards-preview .cu-day{background:var(--cu-paper);border:1px solid var(--cu-line);border-radius:10px;margin-bottom:14px}
 #compusage-cards-preview .cu-day-head{padding:14px 16px 10px}
-#compusage-cards-preview .cu-date{display:inline-flex;align-items:center;gap:4px;font-size:1.1em;font-weight:600}
+#compusage-cards-preview .cu-date{display:inline-flex;align-items:center;gap:2px;font-size:1.1em;font-weight:600}
 #compusage-cards-preview .cu-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:5px;background:var(--cu-soft);font-size:.76em;font-weight:500}
 #compusage-cards-preview .cu-good{background:var(--cu-good-bg);color:var(--cu-brand)}
 #compusage-cards-preview .cu-warn{background:var(--cu-warn-bg);color:var(--cu-warn)}
 #compusage-cards-preview .cu-metrics{display:grid;grid-template-columns:1fr 1.5fr 1fr;gap:16px;padding:4px 22px 16px}
 #compusage-cards-preview .cu-label{font-size:.8em;color:var(--cu-muted);display:block;margin-bottom:5px}
 #compusage-cards-preview .cu-metric{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:1.55em;font-weight:500;line-height:1.4;font-variant-numeric:tabular-nums}
-#compusage-cards-preview .cu-exact{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
-#compusage-cards-preview .cu-value-copy{padding:4px;min-width:32px;min-height:32px;flex-shrink:0}
+#compusage-cards-preview .cu-exact{display:inline-flex;align-items:center;gap:2px;white-space:nowrap}
+#compusage-cards-preview .cu-value-copy{padding:2px;min-width:28px;min-height:28px;justify-content:flex-start;flex-shrink:0}
 @media(max-width:420px){#compusage-cards-preview .cu-metrics{grid-template-columns:1fr!important}#compusage-cards-preview .cu-metrics>div:nth-child(2){grid-row:auto!important}}
-#compusage-cards-preview .cu-value{border:0;border-radius:3px;padding:0;background:transparent;max-width:100%;font:inherit;line-height:inherit;user-select:text;-webkit-user-select:text;cursor:text;font-variant-numeric:tabular-nums;min-width:0}
+#compusage-cards-preview .cu-value{border:0;border-radius:3px;padding:0;background:transparent;max-width:100%;font:inherit;line-height:inherit;text-align:right;user-select:text;-webkit-user-select:text;cursor:text;font-variant-numeric:tabular-nums;min-width:0}
 #compusage-cards-preview .cu-value:hover{background:var(--cu-soft)}
 #compusage-cards-preview .cu-next{font-size:.65em;color:var(--cu-muted)}
 #compusage-cards-preview .cu-work{background:var(--cu-soft);padding:12px 20px;border-radius:0 0 10px 10px;font-size:.87em;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -79,3 +79,4 @@
 @media(max-width:740px){#compusage-cards-preview .cu-shell{padding:14px}#compusage-cards-preview .cu-metrics{grid-template-columns:1fr 1fr;gap:14px;padding:6px 16px 16px}#compusage-cards-preview .cu-metrics>div:nth-child(2){grid-column:1/-1;grid-row:2}#compusage-cards-preview .cu-day-head{gap:10px}#compusage-cards-preview .cu-work{padding:12px 16px}#compusage-cards-preview .cu-detail{padding:14px}#compusage-cards-preview .cu-file .cu-row{gap:9px}}
 @media(max-width:420px){#compusage-cards-preview .cu-shell{padding:10px}#compusage-cards-preview .cu-titlebar{padding-left:12px}#compusage-cards-preview .cu-titlebar .cu-muted{display:none}#compusage-cards-preview .cu-day-head{padding:12px}#compusage-cards-preview .cu-day-head>.cu-row{gap:6px}#compusage-cards-preview .cu-metric{font-size:1.4em}#compusage-cards-preview .cu-fields{grid-template-columns:1fr}#compusage-cards-preview .cu-dialog{padding:16px}#compusage-cards-preview .cu-overlay{padding:60px 8px 16px}#compusage-cards-preview .cu-tabs{gap:2px}#compusage-cards-preview .cu-tabs button{padding:6px}#compusage-cards-preview .cu-day-head>[data-copy-day]{font-size:.8em}}
 @media(pointer:coarse){#compusage-cards-preview button,#compusage-cards-preview .cu-check{min-height:44px}#compusage-cards-preview input:not([readonly]),#compusage-cards-preview select{font-size:16px}}
+@media(pointer:coarse){#compusage-cards-preview .cu-value-copy{min-width:44px;min-height:44px}}

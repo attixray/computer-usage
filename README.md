@@ -10,12 +10,13 @@ A local Windows work-log application based on the current user's lock and unlock
 - Large, selectable dates/times; exact-second copy icons; individual section and whole-day copying as headerless Date/From/To TSV.
 - Ctrl+C / Ctrl+Insert and Ctrl+V / Shift+Insert. Displayed text is minute-rounded; copy icons and Excel writing preserve original seconds.
 - Hungarian and English UI; system, dark, and light themes.
+- A prominent disabled-logging warning opens the logging settings directly.
 - Settings dialog, remembered font/window size, expanded days, and scroll position.
 - `.xlsx` Details preview, append, optional completion of an unfinished row, backup, and detection of changes after preview.
 
 ## Install and run
 
-Run `CompUsage-1.0.0-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
+Run `CompUsage-1.0.1-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
 
 The application runs as the current user. When Security-log permissions require it, Windows asks to elevate a narrowly scoped helper for that application session. Approve it using the same Windows account. The helper only reads that user's lock/unlock events and queries or changes the corresponding audit subcategory; the UI and workbook operations remain unelevated.
 

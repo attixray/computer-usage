@@ -75,5 +75,5 @@ foreach ($directory in Get-ChildItem -LiteralPath $publishDirectory -Directory -
 }
 [System.IO.File]::WriteAllLines((Join-Path $projectRoot 'installer\uninstall-files.nsh'), $uninstallLines, [System.Text.UTF8Encoding]::new($false))
 Invoke-Checked $compiler @('/WX', '/V2', 'installer\CompUsage.nsi')
-Compress-Archive -Path 'artifacts\publish\*' -DestinationPath 'artifacts\release\CompUsage-1.0.0-portable-x64.zip' -Force
+Compress-Archive -Path 'artifacts\publish\*' -DestinationPath 'artifacts\release\CompUsage-1.0.1-portable-x64.zip' -Force
 Get-ChildItem -LiteralPath $releaseDirectory -File | Get-FileHash -Algorithm SHA256 | Format-Table

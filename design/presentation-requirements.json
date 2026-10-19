@@ -13,7 +13,8 @@
   "acceptedUx": {
     "workSegments": "Always visible on each daily card with label Munkaszakaszok:; recompute immediately after lunch changes",
     "dayStatus": "Distinguish ongoing, complete and incomplete days; exclude ongoing and incomplete days from automatic append",
-    "singleValueCopy": "Click selects the complete value; copying shows brief non-modal feedback",
+    "singleValueCopy": "Click selects the complete value; copying shows brief non-modal feedback. Values align right and copy icons sit close to the text.",
+    "disabledLoggingWarning": "When Windows logging is OFF, show a prominent top warning explaining that new lock/unlock events cannot be tracked. Clicking opens the Time rules settings tab; support Hungarian and English.",
     "lunchUndo": "Immediate manual pair selection with Undo and return to automatic estimate",
     "pendingCounts": "Show pending day count, new row count and unfinished existing row count beside Excel actions",
     "rememberView": "Remember font size, native window bounds, expanded days and scroll position; refresh preserves the view",

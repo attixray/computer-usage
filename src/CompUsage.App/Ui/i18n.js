@@ -4,6 +4,9 @@ window.i18n = (() => {
   const en = {
     'Munkaidőnapló':'Work log','Saját Windows-fiók':'Current Windows account','Beállítások':'Settings',
     'Naplózás állapota ismeretlen':'Logging status unknown','Naplózás bekapcsolva':'Logging enabled','Naplózás kikapcsolva':'Logging disabled',
+    'A Windows lock/unlock naplózás ki van kapcsolva.':'Windows lock/unlock logging is disabled.',
+    'Naplózás nélkül az új zárolások és feloldások nem kerülnek rögzítésre, ezért a munkaidőnapló nem tudja követni a munkaszakaszokat.':'Without logging, new locks and unlocks are not recorded, so the work log cannot track work sections.',
+    'Bekapcsolás a beállításokban':'Enable logging in Settings',
     'Frissítés':'Refresh','Összesítő másolása':'Copy all work sections','Nincs beállítva munkaidőfájl':'No workbook selected',
     'Details utolsó dátuma:':'Last date in Details:','még üres':'empty','Megnyitás':'Open','Details folytatása':'Append to Details',
     'Még nem történt naplóolvasás':'The event log has not been read yet','Frissítve:':'Updated:',
