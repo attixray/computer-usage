@@ -12,6 +12,7 @@ public sealed record AppSettings
     public bool RememberView { get; init; } = true;
     public string Language { get; init; } = "hu";
     public string Theme { get; init; } = "auto";
+    public string LockTimeSource { get; init; } = "lock";
 
     public void Validate()
     {
@@ -20,6 +21,7 @@ public sealed record AppSettings
         if (FontScale is not (1 or 1.15 or 1.3)) throw new ArgumentException("Érvénytelen betűméret.");
         if (Language is not ("hu" or "en") || Theme is not ("auto" or "dark" or "light"))
             throw new ArgumentException("Érvénytelen nyelv vagy téma.");
+        if (LockTimeSource is not ("lock" or "activity")) throw new ArgumentException("Érvénytelen aktivitási időforrás.");
         if (!string.IsNullOrWhiteSpace(WorkbookPath) && !WorkbookPath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("A munkaidőfájl .xlsx formátumú legyen.");
     }

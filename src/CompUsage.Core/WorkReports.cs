@@ -5,7 +5,7 @@ namespace CompUsage.Core;
 public sealed record BreakPair(LockEvent Lock, LockEvent Unlock)
 {
     public string Id => $"{Lock.RecordId}:{Lock.Timestamp.UtcTicks}:{Unlock.RecordId}:{Unlock.Timestamp.UtcTicks}";
-    public TimeSpan Duration => Unlock.Timestamp - Lock.Timestamp;
+    public TimeSpan Duration => Unlock.Timestamp - Lock.WorkTimestamp;
 }
 public sealed record WorkInterval(DateOnly Date, DateTimeOffset From, DateTimeOffset To, bool Open = false)
 {
@@ -24,12 +24,12 @@ public static class WorkReports
 {
     public static IReadOnlyList<WorkReport> Build(IEnumerable<LockEvent> events, AppSettings settings,
         IReadOnlyDictionary<string, string> lunches, DateTimeOffset now, TimeZoneInfo zone,
-        IEnumerable<LoggingGap>? gaps = null)
+        IEnumerable<LoggingGap>? gaps = null, IEnumerable<ActivityLock>? activity = null)
     {
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
         var firstDate = today.AddDays(1 - settings.HistoryDays);
-        return events.Where(e => e.Timestamp <= now && e.EventId is 4800 or 4801)
+        return ActivityHistory.Apply(events, activity ?? [], settings, zone).Where(e => e.Timestamp <= now && e.EventId is 4800 or 4801)
             .DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
@@ -62,8 +62,8 @@ public static class WorkReports
         var expected = WorkDayClock.At(settings.ExpectedLunch < settings.DayStart ? date.AddDays(1) : date,
             settings.ExpectedLunch, zone);
         var guess = pairs.Where(p => p.Duration.TotalMinutes >= settings.MinimumLunchMinutes && p.Duration.TotalMinutes <= 120
-                && Math.Abs((p.Lock.Timestamp - expected).TotalMinutes) <= 120)
-            .OrderBy(p => Math.Abs((p.Lock.Timestamp - expected).Ticks)).ThenBy(p => p.Lock.Timestamp).FirstOrDefault();
+                && Math.Abs((p.Lock.WorkTimestamp - expected).TotalMinutes) <= 120)
+            .OrderBy(p => Math.Abs((p.Lock.WorkTimestamp - expected).Ticks)).ThenBy(p => p.Lock.WorkTimestamp).FirstOrDefault();
         var manual = lunches.TryGetValue(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), out var chosen);
         var lunch = manual ? pairs.Find(p => p.Id == chosen) : guess;
         if (manual && chosen != "none" && lunch is null) issues.Add("A korábban választott ebédpár már nem található; válaszd ki újra.");
@@ -72,12 +72,12 @@ public static class WorkReports
         var sections = new List<WorkInterval>();
         if (issues.Count == 0 && first is not null)
         {
-            var to = list[^1].IsLock ? list[^1].Timestamp : now;
+            var to = list[^1].IsLock ? list[^1].WorkTimestamp : now;
             var from = first.Timestamp;
-            foreach (var gap in pairs.Where(p => p.Lock.Timestamp >= from && p.Unlock.Timestamp <= to
-                         && (p.Duration.TotalMinutes > settings.SplitBreakMinutes || p.Id == lunch?.Id)).OrderBy(p => p.Lock.Timestamp))
+            foreach (var gap in pairs.Where(p => p.Lock.WorkTimestamp >= from && p.Unlock.Timestamp <= to
+                         && (p.Duration.TotalMinutes > settings.SplitBreakMinutes || p.Id == lunch?.Id)).OrderBy(p => p.Lock.WorkTimestamp))
             {
-                if (gap.Lock.Timestamp > from) sections.Add(new(date, from, gap.Lock.Timestamp));
+                if (gap.Lock.WorkTimestamp > from) sections.Add(new(date, from, gap.Lock.WorkTimestamp));
                 from = gap.Unlock.Timestamp;
             }
             if (to > from) sections.Add(new(date, from, to, ongoing && !list[^1].IsLock));

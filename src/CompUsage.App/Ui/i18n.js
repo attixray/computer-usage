@@ -2,6 +2,21 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Utolsó aktivitás':'Last input','Utolsó aktivitás zárolás előtt':'Last input before lock','Szakasz vége':'Section end',
+    'Inaktivitás:':'Idle time:','Inaktivitás zárolás előtt':'Idle time before lock','Nincs aktivitási adat':'No activity data',
+    'Aktivitás alapján':'Based on last input','Zárolás alapján':'Based on lock time',
+    'Nincs aktivitási adat · zárolás alapján':'No activity data · using lock time',
+    'Háttérfigyelő kikapcsolva':'Activity monitor disabled','Háttérfigyelő működik':'Activity monitor running',
+    'Háttérfigyelő nem válaszol':'Activity monitor is not responding','Újraindítás':'Restart',
+    'Munkaszakaszok: utolsó aktivitás, adat hiányában zárolás':'Work sections: last input, falling back to lock time',
+    'Munkaszakaszok: zárolási időpontok':'Work sections: lock times',
+    'Háttérfigyelő engedélyezése':'Enable background activity monitor',
+    'Alapból kikapcsolva. Csak az utolsó input időpontját tárolja, billentyűket és szöveget nem. Bekapcsolva az ablak bezárása után is fut.':'Disabled by default. Stores only the last input timestamp, never keys or text. When enabled, it keeps running after the window closes.',
+    'Automatikus indulás Windows-bejelentkezéskor beállítva.':'Automatic startup at Windows sign-in is registered.',
+    'Automatikus induláshoz futtasd a telepítőt.':'Run Setup to register automatic startup.',
+    'Munkaszakaszok időforrása':'Work-section time source','Windows-zárolás időpontja':'Windows lock time','Utolsó aktivitás időpontja':'Last input time',
+    'A kijelzést, másolást és Excel-kitöltést is módosítja. Adat hiányában a zárolási idő marad. A mérés kb. 1 másodperces; a zárolás okát nem bizonyítja.':'Affects display, copying and Excel writes. Falls back to lock time when data is unavailable. Samples about once per second; does not prove why Windows locked.',
+    'Érvénytelen aktivitási időforrás.':'Invalid activity time source.',
     'Munkaidőnapló':'Work log','Saját Windows-fiók':'Current Windows account','Beállítások':'Settings',
     'Naplózás állapota ismeretlen':'Logging status unknown','Naplózás bekapcsolva':'Logging enabled','Naplózás kikapcsolva':'Logging disabled',
     'A Windows lock/unlock naplózás ki van kapcsolva.':'Windows lock/unlock logging is disabled.',

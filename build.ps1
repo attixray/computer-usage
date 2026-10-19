@@ -20,6 +20,10 @@ if (-not $SkipTests) {
     Invoke-Checked 'npm.cmd' @('test')
 }
 Invoke-Checked 'dotnet' @('publish', 'src\CompUsage.App', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--no-restore', '-p:DebugType=None', '-o', 'artifacts\publish')
+if (-not $SkipTests) {
+    $monitorCheck = Start-Process -FilePath (Join-Path $projectRoot 'artifacts\publish\CompUsage.exe') -ArgumentList '--verify-activity-monitor' -WindowStyle Hidden -PassThru -Wait
+    if ($monitorCheck.ExitCode -ne 0) { throw "Activity monitor verification failed with exit code $($monitorCheck.ExitCode)" }
+}
 Copy-Item -LiteralPath 'README.md', 'THIRD-PARTY-NOTICES.md' -Destination 'artifacts\publish'
 $runtimeConfig = Get-Content -LiteralPath 'artifacts\publish\CompUsage.runtimeconfig.json' -Raw | ConvertFrom-Json
 $runtimeVersion = ($runtimeConfig.runtimeOptions.includedFrameworks | Where-Object name -eq 'Microsoft.NETCore.App').version
@@ -74,6 +78,7 @@ foreach ($directory in Get-ChildItem -LiteralPath $publishDirectory -Directory -
     $uninstallLines.Add('RMDir "$INSTDIR\' + $relative + '"')
 }
 [System.IO.File]::WriteAllLines((Join-Path $projectRoot 'installer\uninstall-files.nsh'), $uninstallLines, [System.Text.UTF8Encoding]::new($false))
+if (-not $SkipTests) { & (Join-Path $projectRoot 'tests\installer-monitor-check.ps1') -ProjectRoot $projectRoot }
 Invoke-Checked $compiler @('/WX', '/V2', 'installer\CompUsage.nsi')
-Compress-Archive -Path 'artifacts\publish\*' -DestinationPath 'artifacts\release\CompUsage-1.0.2-portable-x64.zip' -Force
+Compress-Archive -Path 'artifacts\publish\*' -DestinationPath 'artifacts\release\CompUsage-1.0.3-portable-x64.zip' -Force
 Get-ChildItem -LiteralPath $releaseDirectory -File | Get-FileHash -Algorithm SHA256 | Format-Table

@@ -27,6 +27,8 @@ public sealed class MainWindow : Window
     private string? lastError;
     private object? workbookInfo;
     private ExcelDisplay display;
+    private IReadOnlyList<ActivityLock> activityLocks = [];
+    private object? activityInfo;
     private bool closing;
 
     public MainWindow()
@@ -123,15 +125,37 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports() => WorkReports.Build(state.Events, state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks);
+
+    private void ReadActivity()
+    {
+        activityLocks = [];
+        try
+        {
+            var journal = ActivityMonitor.Journal;
+            var enabled = journal.Configuration().Enabled;
+            var sessions = journal.ReadAll();
+            activityLocks = sessions.SelectMany(s => s.Locks).ToArray();
+            var sessionId = Process.GetCurrentProcess().SessionId.ToString(CultureInfo.InvariantCulture);
+            var current = sessions.FirstOrDefault(s => s.SessionId == sessionId);
+            var healthy = current?.StoppedAt is null && current is not null
+                && DateTimeOffset.UtcNow - current.HeartbeatAt < TimeSpan.FromSeconds(20);
+            activityInfo = new { enabled, running = ActivityMonitor.IsRunning() && healthy,
+                registered = ActivityMonitor.RegisteredAtLogon(), error = current?.Error };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        { activityInfo = new { enabled = false, running = false, registered = false, error = ex.Message }; }
+    }
 
     private async Task<object?> DispatchAsync(string? command, JsonElement data)
     {
         switch (command)
         {
             case "load":
+                ReadActivity();
                 await UpdateWorkbookInfoAsync(); return Snapshot();
             case "refresh":
+                ReadActivity();
                 try
                 {
                     var reply = await broker.RequestAsync("read");
@@ -152,8 +176,17 @@ public sealed class MainWindow : Window
                     var reply = await broker.RequestAsync("audit", logging.GetBoolean()); RecordLogging(reply.Logging);
                 }
                 state.Settings = settings; activePlan = null; store.Save(state);
+                if (data.TryGetProperty("activityEnabled", out var activityEnabled) && activityEnabled.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    ActivityMonitor.Journal.Configure(activityEnabled.GetBoolean());
+                    if (activityEnabled.GetBoolean()) await ActivityMonitor.StartAndWaitAsync();
+                    else await Task.Run(() => ActivityMonitor.Stop());
+                }
+                ReadActivity();
                 Title = settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
                 await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "startActivity":
+                await ActivityMonitor.StartAndWaitAsync(); ReadActivity(); return Snapshot();
             case "history":
                 var history = data.GetProperty("days").GetInt32();
                 if (history is not (7 or 30 or 60)) throw new ArgumentException("Érvénytelen időtartam.");
@@ -248,9 +281,15 @@ public sealed class MainWindow : Window
         return new { token, rows = plan.Rows.Select(RowSnapshot), partials = plan.Partials.Select(p => new { row = p.Row, section = RowSnapshot(p.Interval) }) };
     }
 
+    private object? ActivityValue(LockEvent? entry)
+    {
+        if (entry is null || ActivityHistory.Match(activityLocks, entry) is not { LastInputAt: not null } record) return null;
+        return new { lastInput = TimeValue(record.LastInputAt, true), idle = ActivityHistory.IdleText(record) };
+    }
+
     private object Snapshot() => new
     {
-        settings = state.Settings, logging = state.Logging, error = lastError,
+        settings = state.Settings, logging = state.Logging, error = lastError, activity = activityInfo,
         user = Environment.UserName, refreshed = state.LastRefresh?.ToLocalTime().ToString("yyyy.MM.dd HH:mm:ss", CultureInfo.InvariantCulture),
         oldest = state.OldestAvailable?.ToLocalTime().ToString("yyyy.MM.dd HH:mm", CultureInfo.InvariantCulture),
         workbook = workbookInfo, expanded = state.Settings.RememberView ? state.Expanded : [], scroll = state.Settings.RememberView ? state.Scroll : 0,
@@ -258,14 +297,16 @@ public sealed class MainWindow : Window
         {
             key = d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), date = display.Date(d.Date),
             weekday = d.Date.ToString("dddd", CultureInfo.GetCultureInfo("hu-HU")), status = d.Status, ongoing = d.Ongoing,
-            incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.Timestamp, true),
+            incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.WorkTimestamp, true),
+            lastFromActivity = d.Last?.ActivityTimestamp is not null, lastActivity = ActivityValue(d.Last),
             manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
-            lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.Timestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },
-            pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.Timestamp, true), to = TimeValue(p.Unlock.Timestamp), minutes = (int)p.Duration.TotalMinutes }),
+            lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.WorkTimestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },
+            pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.WorkTimestamp, true), to = TimeValue(p.Unlock.Timestamp), minutes = (int)p.Duration.TotalMinutes,
+                fromActivity = p.Lock.ActivityTimestamp is not null, activity = ActivityValue(p.Lock) }),
             sections = d.Sections.Select(RowSnapshot),
             copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(display.CopyRow)) : "",
             eventCopy = "Dátum\tIdőpont\tEsemény\tAzonosító\r\n" + string.Join("\r\n", d.Events.Select(e => $"{TimeZoneInfo.ConvertTime(e.Timestamp, TimeZoneInfo.Local):yyyy.MM.dd}\t{Presentation.Time(e.Timestamp, TimeZoneInfo.Local, true)}\t{e.Label}\t{e.EventId}")),
-            events = d.Events.Select(e => new { time = TimeValue(e.Timestamp, e.EventId == 4800), label = e.Label, eventId = e.EventId })
+            events = d.Events.Select(e => new { time = TimeValue(e.Timestamp, e.EventId == 4800), label = e.Label, eventId = e.EventId, activity = ActivityValue(e) })
         })
     };
 }

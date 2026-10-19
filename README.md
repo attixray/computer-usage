@@ -12,11 +12,14 @@ A local Windows work-log application based on the current user's lock and unlock
 - Hungarian and English UI; system, dark, and light themes.
 - A prominent disabled-logging warning opens the logging settings directly.
 - Settings dialog, remembered font/window size, expanded days, and scroll position.
+- Optional background last-input tracking, disabled by default, with selectable lock-time or last-input endpoints for display, copying and Excel.
 - `.xlsx` Details preview, append, optional completion of an unfinished row, backup, and detection of changes after preview.
 
 ## Install and run
 
-Run `CompUsage-1.0.2-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
+Run `CompUsage-1.0.3-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
+
+Setup registers a per-user Windows sign-in entry for the background collector and invokes it independently of the optional UI launch. Tracking defaults to disabled, so the collector exits without sampling until enabled in Settings → Time rules. Once enabled, it runs immediately, survives closing the window and starts again at subsequent sign-ins without opening the app. Disabling tracking stops it; the startup entry remains but exits immediately while disabled. Upgrade and uninstall stop the collector before replacing/removing its files; uninstall removes the startup entry and keeps saved data. The portable build can collect after enabling it in Settings, but Setup is needed to register automatic startup.
 
 The application runs as the current user. When Security-log permissions require it, Windows asks to elevate a narrowly scoped helper for that application session. Approve it using the same Windows account. The helper only reads that user's lock/unlock events and queries or changes the corresponding audit subcategory; the UI and workbook operations remain unelevated.
 
@@ -40,9 +43,19 @@ Other worksheets and unrelated workbook parts are preserved. Existing unfinished
 
 Before replacement, the app checks the file's content hash against the preview and requires exclusive access. A backup named `<workbook>.backup-<timestamp>-<id>.xlsx` is created beside the original by Windows' atomic file-replacement operation. Shares that do not support that operation fail without a fallback overwrite.
 
+## Optional activity tracking
+
+The unelevated `--activity-monitor` process samples the current Windows session's `GetLastInputInfo` about once per second while unlocked. On a Windows session-lock notification it saves the latest sample. It never captures keys, text, application names or screenshots, and never starts the elevated event-log helper. The main window shows collector health and automatic-start registration in Time rules; lock details show the last observed input and idle duration. A stopped collector can be restarted from the status row.
+
+The time-source setting defaults to Windows lock time. Selecting last input changes lock endpoints consistently across the UI, lunch suggestion, break splitting, TSV copying and automatic Details append. Original Windows event timestamps and manual lunch-pair identities remain intact; the raw event list still shows the Windows times. Existing Excel rows are not rewritten when the mode changes. A missing, stale, ambiguous, different-session or invalid observation falls back to the original lock time. An input cannot move a lock before the preceding unlock or into a different workday. Both modes preserve source seconds.
+
+This is an input-time estimate, not a guaranteed manual/automatic-lock classifier or proof of work. Win+L itself is input, and Windows can count software-generated input too. Samples from before tracking was enabled cannot be reconstructed. Collector history covers the 60-day UI range with a one-day retention margin for workday boundaries. No input is sampled while locked, disconnected or disabled.
+
 ## Local data
 
 Preferences, manual lunch choices, cached events, and window state are stored in `%LocalAppData%\CompUsage\state.json`. The WebView2 profile lives in the same application data folder. Uninstall keeps this data and all workbooks. No event log, workbook, or user configuration belongs in the Git repository.
+
+The optional monitor uses `%LocalAppData%\CompUsage\Activity\configuration.json`, separate session journals and small heartbeat files. The UI never writes the monitor's history, and the monitor never writes UI state. These files stay local and are retained on uninstall.
 
 ## Build
 
@@ -68,6 +81,10 @@ dotnet run --project src/CompUsage.App
 `CompUsage.exe --verify-install` checks the deployed UI assets and installed WebView2 runtime without opening a window or modifying Windows auditing. Exit 0 means those prerequisites were found; this is not an interactive UI test.
 
 `CompUsage.exe --verify-broker` starts an unelevated helper and checks the authenticated, same-user pipe round trip. It does not read the event log, modify auditing, or display UAC. A real UAC transition still needs an interactive Windows check.
+
+`CompUsage.exe --verify-activity-monitor` checks disabled-by-default startup, an isolated collector process and heartbeat, duplicate prevention, a synthetic lock notification, graceful stop, and disabled subsequent startup. It uses a temporary journal, does not register startup, change auditing or lock the desktop, and cleans up after itself. The normal build runs it after publishing. A physical lock/unlock cycle and Windows sign-in remain manual end-to-end checks.
+
+The build also runs `tests/installer-monitor-check.ps1`: it compiles the actual NSIS stop macro with a private scope and verifies graceful shutdown of an isolated background collector. It does not install the app or change startup registration.
 
 ## Structure
 

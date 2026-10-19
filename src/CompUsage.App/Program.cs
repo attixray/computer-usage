@@ -8,6 +8,14 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args is ["--activity-monitor"]) return Background(() => ActivityMonitor.Run());
+        if (args is ["--stop-activity-monitor"]) return Background(() => ActivityMonitor.Stop());
+        if (args is ["--activity-monitor-check", var directory]) return Background(() => ActivityMonitor.Run(directory));
+        if (args is ["--verify-activity-monitor"])
+        {
+            try { return ActivityMonitor.Verify(); }
+            catch { return 7; }
+        }
         if (args is ["--verify-broker"])
         {
             try
@@ -37,9 +45,18 @@ public static class Program
         if (!created) { MessageBox.Show("A CompUsage már fut.", "CompUsage"); return 0; }
         try
         {
+            // An optional collector failure must not prevent opening Settings to repair or disable it.
+            try { ActivityMonitor.Start(); }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.ComponentModel.Win32Exception) { }
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             return app.Run(new MainWindow());
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "CompUsage", MessageBoxButton.OK, MessageBoxImage.Error); return 1; }
+    }
+
+    private static int Background(Func<int> command)
+    {
+        try { return command(); }
+        catch { return 6; }
     }
 }

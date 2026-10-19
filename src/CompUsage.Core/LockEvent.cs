@@ -10,6 +10,8 @@ public sealed record LockEvent(
     string SessionId,
     string LogonId)
 {
+    public DateTimeOffset? ActivityTimestamp { get; init; }
+    public DateTimeOffset WorkTimestamp => ActivityTimestamp ?? Timestamp;
     public bool IsLock => EventId == 4800;
     public string Label => IsLock ? "Zárolás" : "Feloldás";
     public string SessionKey => $"{UserSid}|{SessionId}|{LogonId}";

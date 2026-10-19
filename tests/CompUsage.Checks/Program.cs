@@ -39,6 +39,65 @@ Check("Sixty-day range includes exactly the configured work dates", () => { var 
 Check("DST gaps and repeated hours preserve real elapsed duration", () => { var spring=WorkDayClock.At(new(2026,3,29),new(2,30),zone);Equal(3,TimeZoneInfo.ConvertTime(spring,zone).Hour);var early=new DateTimeOffset(2026,10,25,2,30,0,TimeSpan.FromHours(2));var late=new DateTimeOffset(2026,10,25,2,30,0,TimeSpan.FromHours(1));Equal(TimeSpan.FromHours(1),late-early);Equal(early,WorkDayClock.At(new(2026,10,25),new(2,30),zone)); });
 Check("XML parser filters IDs and retains SID, session and UTC precision", () => { var xml="<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\"><System><EventID>4801</EventID><EventRecordID>42</EventRecordID><TimeCreated SystemTime=\"2026-10-19T07:45:56.969Z\"/></System><EventData><Data Name=\"TargetUserSid\">S-1-5-21-1</Data><Data Name=\"SessionId\">2</Data><Data Name=\"TargetLogonId\">0x3</Data></EventData></Event>";var e=EventXmlParser.Parse(xml)!;Equal(42L,e.RecordId);Equal(969,e.Timestamp.Millisecond);Equal("S-1-5-21-1|2|0x3",e.SessionKey);True(EventXmlParser.Parse(xml.Replace("4801","4624")) is null); });
 
+Check("Activity tracking defaults off and validates its optional time source", () =>
+{
+    True(!new ActivityConfiguration().Enabled);
+    Equal("lock", settings.LockTimeSource);
+    Throws<ArgumentException>(() => (settings with { LockTimeSource = "invalid" }).Validate());
+});
+Check("Input ticks handle 32-bit rollover and reject impossible future input", () =>
+{
+    Equal(now.AddMilliseconds(-1500), ActivityHistory.InputTime(now, (ulong)uint.MaxValue + 1001, uint.MaxValue - 499)!.Value);
+    True(ActivityHistory.InputTime(now, 100, 110) is null);
+});
+Check("Lock capture rejects stale, future and missing samples", () =>
+{
+    var locked = At(16,"18:00");
+    True(ActivityHistory.Capture(locked, locked.AddMinutes(-10), locked.AddSeconds(-4), "1").LastInputAt is null);
+    True(ActivityHistory.Capture(locked, locked.AddSeconds(1), locked, "1").LastInputAt is null);
+    True(ActivityHistory.Capture(locked, null, null, "1").LastInputAt is null);
+    var valid = ActivityHistory.Capture(locked, locked.AddSeconds(-602), locked.AddSeconds(-1), "1");
+    Equal("0:10:02", ActivityHistory.IdleText(valid));
+});
+Check("Activity correlation requires the same session and an unambiguous nearby lock", () =>
+{
+    var locked = Event(16,"18:00",true);
+    var record = new ActivityLock(locked.Timestamp, locked.Timestamp.AddMinutes(-10), locked.Timestamp.AddSeconds(-1), "1");
+    Equal(record, ActivityHistory.Match([record], locked));
+    True(ActivityHistory.Match([record with {SessionId="2"}],locked) is null);
+    True(ActivityHistory.Match([record with {LockedAt=locked.Timestamp.AddSeconds(6)}],locked) is null);
+    True(ActivityHistory.Match([record,record with {LockedAt=locked.Timestamp.AddSeconds(1)}],locked) is null);
+    True(ActivityHistory.Match([record],locked with {EventId=4801}) is null);
+});
+Check("Activity mode updates lunch, split rules, exact copying and the final section without changing raw events", () =>
+{
+    var list = new[] {Event(16,"08:00",false),Event(16,"11:40",true),Event(16,"11:50",false),Event(16,"18:00",true)};
+    ActivityLock[] records = [new(list[1].Timestamp, At(16,"11:20:30"),list[1].Timestamp.AddSeconds(-1),"1"),
+        new(list[3].Timestamp,At(16,"17:45:10"),list[3].Timestamp.AddSeconds(-1),"1")];
+    var original = Report(list);
+    Equal(1, original.Sections.Count);
+    var updated = WorkReports.Build(list,settings with {LockTimeSource="activity"},lunches,now,zone,activity:records).Single();
+    Equal(2,updated.Sections.Count);
+    Equal(original.Pairs[0].Id,updated.Lunch!.Id);
+    Equal("2026.10.16\t08:00:00\t11:20:30",Presentation.CopyRow(updated.Sections[0],zone));
+    Equal(At(16,"17:45:10"),updated.Sections[^1].To);
+    Equal(At(16,"18:00"),updated.Last!.Timestamp);
+    True(list.All(e=>e.ActivityTimestamp is null));
+    var manual = new Dictionary<string,string>{{"2026-10-16",original.Pairs[0].Id}};
+    True(WorkReports.Build(list,settings with {LockTimeSource="activity"},manual,now,zone,activity:records).Single().ManualLunch);
+});
+Check("Activity mode falls back to locks for unavailable samples and never moves a lock before its unlock or into another workday", () =>
+{
+    var list = new[] {Event(16,"08:00",false),Event(16,"18:00",true)};
+    var record = new ActivityLock(list[1].Timestamp,At(16,"17:45"),list[1].Timestamp.AddSeconds(-1),"1");
+    foreach (var observations in new ActivityLock[][] {[],[record with {LastInputAt=At(16,"07:59")}],[record with {SampledAt=list[1].Timestamp.AddSeconds(-4)}]})
+        Equal(At(16,"18:00"),WorkReports.Build(list,settings with {LockTimeSource="activity"},lunches,now,zone,activity:observations).Single().Sections[^1].To);
+    var overnight = new[] {Event(15,"23:00",false),Event(16,"04:05",true)};
+    var boundary = new ActivityLock(overnight[1].Timestamp,At(16,"03:59"),overnight[1].Timestamp.AddSeconds(-1),"1");
+    True(ActivityHistory.Apply(overnight,[boundary],settings with {LockTimeSource="activity"},zone).Last().ActivityTimestamp is null);
+    Equal(At(16,"18:00"),WorkReports.Build(list,settings,lunches,now,zone,activity:[record]).Single().Sections[^1].To);
+});
+
 var fixtureRoot = Path.Combine(Path.GetTempPath(), "CompUsage-Checks-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(fixtureRoot);
 string Fixture(string name)
@@ -62,6 +121,30 @@ var reports = WorkReports.Build(allEvents,settings,lunches,now,zone);
 Dictionary<string,byte[]> Entries(string path) { using var z=ZipFile.OpenRead(path);return z.Entries.ToDictionary(e=>e.FullName,e=>{using var s=e.Open();using var m=new MemoryStream();s.CopyTo(m);return m.ToArray();}); }
 try
 {
+    Check("Activity journals are opt-in, retain independent sessions and prune old lock observations",()=>
+    {
+        var journal = new ActivityJournal(Path.Combine(fixtureRoot,"activity"));
+        True(!journal.Configuration().Enabled);
+        journal.Configure(true); True(journal.Configuration().Enabled);
+        var first = new ActivitySession {SessionId="1",StartedAt=now,HeartbeatAt=now,Locks=[new(now,null,null,"1"),new(now.AddDays(-62),null,null,"1")]};
+        journal.Save(first,now);
+        journal.Heartbeat(first,now.AddSeconds(5));
+        Equal(now.AddSeconds(5),journal.Load("1").HeartbeatAt); Equal(1,journal.Load("1").Locks.Count);
+        journal.Save(new ActivitySession {SessionId="2",StartedAt=now,HeartbeatAt=now},now);
+        Equal(2,journal.ReadAll().Count); Equal(1,journal.Load("1").Locks.Count);
+        journal.Configure(false); True(!journal.Configuration().Enabled); Equal(1,journal.Load("1").Locks.Count);
+        Throws<ArgumentException>(()=>journal.Load("../state"));
+    });
+    Check("Excel append writes the selected activity endpoint with original seconds",()=>
+    {
+        var path=Fixture("activity-write");
+        var list=new[]{Event(15,"08:00",false),Event(15,"18:00",true)};
+        var observation=new ActivityLock(list[1].Timestamp,At(15,"17:00:37"),list[1].Timestamp.AddSeconds(-1),"1");
+        var days=WorkReports.Build(list,settings with {LockTimeSource="activity"},lunches,now,zone,activity:[observation]);
+        service.Commit(service.Preview(path,days),[]);
+        using var result=new XLWorkbook(path);
+        True(Math.Abs((At(15,"17:00:37").TimeOfDay-result.Worksheet("Details").Cell(3,3).GetTimeSpan()).TotalMilliseconds)<1);
+    });
     Check("Workbook formats and built-in h:mm are preserved instead of replaced",()=>{var path=Fixture("formats");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Column(1).Style.NumberFormat.Format="yyyy/mm/dd;@";s.Columns(2,4).Style.NumberFormat.NumberFormatId=20;s.Cell(3,3).Style.NumberFormat.NumberFormatId=21;b.Save();}var p=service.Preview(path,reports);Equal("yyyy/mm/dd;@",p.Formats.Date);Equal("h:mm",p.Formats.Start);Equal("h:mm:ss",p.Formats.End);var display=new ExcelDisplay(p.Formats,huCulture,zone);Equal("8:01",display.Time(At(16,"08:01:37")));Equal("8:01:37",display.Time(At(16,"08:01:37"),true));service.Commit(p,[]);using var result=new XLWorkbook(path);var s2=result.Worksheet("Details");Equal("yyyy/mm/dd;@",s2.Cell(3,1).Style.NumberFormat.Format);Equal(20,s2.Cell(3,2).Style.NumberFormat.NumberFormatId);Equal(21,s2.Cell(3,3).Style.NumberFormat.NumberFormatId);});
     Check("A partial row matches an Excel-displayed minute while keeping the existing start",()=>{var path=Fixture("truncated-start");var days=WorkReports.Build(Day(14,"08:11:37","17:03:55").Concat(Day(15)),settings,lunches,now,zone);var p=service.Preview(path,days);Equal(1,p.Partials.Count);Equal("08:11:00",Presentation.Time(p.Partials[0].Interval.From,zone,true));});
     Check("Workbook preview appends only newer closed days and offers a rounded-start partial",()=>{var path=Fixture("preview");var p=service.Preview(path,reports);Equal(new DateOnly(2026,10,14),p.LastDate!.Value);Equal(4,p.Rows.Count);Equal(1,p.Partials.Count);Equal("08:11:00",Presentation.Time(p.Partials[0].Interval.From,zone,true));Equal("11:32:05",Presentation.Time(p.Partials[0].Interval.To,zone,true));});

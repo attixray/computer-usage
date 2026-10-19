@@ -4,14 +4,14 @@ Unicode true
 !include "x64.nsh"
 
 Name "CompUsage"
-OutFile "..\artifacts\release\CompUsage-1.0.2-Setup-x64.exe"
+OutFile "..\artifacts\release\CompUsage-1.0.3-Setup-x64.exe"
 InstallDir "$LOCALAPPDATA\Programs\CompUsage"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-VIProductVersion "1.0.2.0"
+VIProductVersion "1.0.3.0"
 VIAddVersionKey "ProductName" "CompUsage"
 VIAddVersionKey "FileDescription" "CompUsage Setup"
-VIAddVersionKey "FileVersion" "1.0.2"
+VIAddVersionKey "FileVersion" "1.0.3"
 VIAddVersionKey "LegalCopyright" "CompUsage contributors"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\CompUsage.exe"
@@ -33,6 +33,32 @@ VIAddVersionKey "LegalCopyright" "CompUsage contributors"
   ${EndIf}
 !macroend
 
+!macro StopActivityMonitor
+  ; Stop the session collector through its event, including one launched from a portable folder.
+  ; Do not depend on an already installed executable or terminate an unrelated process by name.
+  System::Call 'kernel32::GetCurrentProcessId() i .r1'
+  System::Call 'kernel32::ProcessIdToSessionId(i r1, *i .r2)'
+  StrCpy $3 0
+  ${Do}
+    System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "Local\CompUsage.Activity.$2") p .r0'
+    ${If} $0 == 0
+      ${ExitDo}
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p r0)'
+    System::Call 'kernel32::OpenEventW(i 2, i 0, w "Local\CompUsage.Activity.$2.Stop") p .r0'
+    ${If} $0 != 0
+      System::Call 'kernel32::SetEvent(p r0)'
+      System::Call 'kernel32::CloseHandle(p r0)'
+    ${EndIf}
+    IntOp $3 $3 + 1
+    ${If} $3 >= 120
+      MessageBox MB_OK|MB_ICONSTOP "The activity monitor could not stop. / Az aktivitásfigyelőt nem sikerült leállítani."
+      Abort
+    ${EndIf}
+    Sleep 100
+  ${Loop}
+!macroend
+
 Function .onInit
   ${IfNot} ${RunningX64}
     MessageBox MB_OK|MB_ICONSTOP "CompUsage requires 64-bit Windows."
@@ -44,6 +70,7 @@ FunctionEnd
 
 Section "CompUsage"
   SetShellVarContext current
+  !insertmacro StopActivityMonitor
   SetOutPath "$INSTDIR"
   SetOverwrite on
   File /r "..\artifacts\publish\*.*"
@@ -55,7 +82,7 @@ Section "CompUsage"
   CreateShortcut "$SMPROGRAMS\CompUsage\CompUsage.lnk" "$INSTDIR\CompUsage.exe"
   CreateShortcut "$SMPROGRAMS\CompUsage\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayName" "CompUsage"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayVersion" "1.0.2"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayVersion" "1.0.3"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CompUsage" "DisplayIcon" "$INSTDIR\CompUsage.exe"
@@ -78,6 +105,14 @@ Section "CompUsage"
       MessageBox MB_OK|MB_ICONEXCLAMATION "WebView2 installation did not finish. Run Setup again with an internet connection before starting CompUsage."
     ${EndIf}
   ${EndIf}
+  ; Register the collector independently of the optional UI launch on the finish page.
+  ; Its own configuration defaults to disabled, so no activity is collected until the user enables it.
+  ClearErrors
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "CompUsageActivity" '"$INSTDIR\CompUsage.exe" --activity-monitor'
+  IfErrors 0 +3
+    MessageBox MB_OK|MB_ICONSTOP "Could not register the activity monitor for Windows sign-in."
+    Abort
+  Exec '"$INSTDIR\CompUsage.exe" --activity-monitor'
 SectionEnd
 
 Function un.onInit
@@ -86,6 +121,8 @@ FunctionEnd
 
 Section "Uninstall"
   SetShellVarContext current
+  !insertmacro StopActivityMonitor
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "CompUsageActivity"
   ; Delete only the files listed by the build, not arbitrary user-created files or stored work data.
   !include "uninstall-files.nsh"
   Delete "$INSTDIR\Uninstall.exe"
