@@ -9,7 +9,8 @@ A local Windows work-log application based on the current user's lock and unlock
 - Automatic lunch suggestion, manual pair selection, no-lunch selection, and undo.
 - Optional daily meeting exception (off by default): a start between 09:25 and 09:40 and a maximum duration of 20 minutes. The selected meeting counts as work and keeps the work section continuous.
 - Large, selectable dates/times; exact-second copy icons; individual section and whole-day copying as headerless Date/From/To TSV.
-- An expandable Work sections table before All log events shows date, unlock, lock, duration and an editable comment, with per-field copying and a leading full Excel-row copy button.
+- An expandable Work sections table before All log events shows date, unlock, lock, duration and an editable comment, with per-field copying and a leading date/time-row copy button.
+- Section duration is displayed as `h:mm`, rounded to the nearest minute (30 seconds rounds up); copies and XLSX values retain their original precision. Compact leading columns leave the remaining width for the comment editor; its save status sits below the comment copy button.
 - Section comments save locally as you type and are included in Details preview and XLSX writing. A section's date/start identity keeps its comment stable as an ongoing section closes.
 - Ctrl+C / Ctrl+Insert and Ctrl+V / Shift+Insert. Display follows the workbook's date/time formats and Windows regional separators. Hidden seconds are not rounded; copy icons and Excel writing preserve original seconds.
 - Hungarian and English UI; system, dark, and light themes.
@@ -56,7 +57,7 @@ Preview proposes only complete days later than the last date already present. A 
 
 New rows contain numeric dates/times and durations. Their Details text comes from the section comment, or stays blank if no comment is entered. Comments are written as literal inline text, preserving Unicode, whitespace and Excel escape sequences; text beginning with `=` is not evaluated as a formula. When completing a selected unfinished row, an existing Details description or formula is preserved and shown in preview; only a blank Details cell is filled. Already exported rows are not rewritten.
 
-The original quick-copy buttons keep the three-column Date/From/To TSV format. The new table's leading copy button supplies all six Excel columns: Date, From, To, Duration, Duration (H), Details. The duration copy includes seconds, hours use regional decimal formatting, and quotes/tabs/newlines are escaped for TSV. Open sections permit comment editing and individual field copying but have no final lock or full-row copy. Copying text for a manual paste follows Excel's normal paste interpretation.
+Both the quick-copy buttons and the work-section table's leading copy button supply only the three Date/From/To columns (Excel A–C). A normal paste therefore preserves duration/hour formulas in D–E. Copy the comment separately with its own icon, or use Append to Details to write it into F. A single contiguous text paste cannot skip D–E while also filling F. The duration field's individual copy still includes original seconds. Open sections permit comment editing and individual field copying but have no final lock or full-row copy. Copying text for a manual paste follows Excel's normal paste interpretation.
 
 Existing cell, row and column number formats are retained or inherited. The UI reads the Details date, From and To formats instead of forcing its own format. For example, `h:mm` displays `8:01:37` as `8:01`, while `hh:mm:ss` displays `08:01:37`. Regional separators and literal quoted separators are handled separately. Without an available workbook, the fallback is regional year/month/day and 24-hour time without a leading zero.
 

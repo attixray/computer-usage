@@ -8,7 +8,7 @@
     <AssemblyName>CompUsage</AssemblyName>
     <Product>CompUsage</Product>
     <Description>Windows zárolás és feloldás, napi bontásban.</Description>
-    <Version>1.0.8</Version>
+    <Version>1.0.9</Version>
     <StartupObject>CompUsage.App.Program</StartupObject>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>

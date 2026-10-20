@@ -11,7 +11,7 @@ const {parseHTML} = require('linkedom');
   const time = (display, exact) => ({display,exact,date:'2026.10.16'});
   let state = {settings:{dayStart:'04:00:00',expectedLunch:'11:30:00',minimumLunchMinutes:15,splitBreakMinutes:10,ignoreDailyMeeting:false,meetingStartFrom:'09:25:00',meetingStartUntil:'09:40:00',maximumMeetingMinutes:20,historyDays:60,workbookPath:'C:\\test\\work.xlsx',fontScale:1.15,rememberView:true,language:'hu',theme:'auto',lockTimeSource:'lock'},logging:true,permissions:{readAccessRequired:false},activity:{enabled:false,running:false,registered:true},user:'Test',expanded:[],scroll:0,refreshed:'2026.10.19 14:00:00',oldest:null,workbook:{available:true,lastDate:'2026.10.15',days:1,rows:2,partials:0},days:[{key:'2026-10-16',date:'2026.10.16',weekday:'péntek',status:'Lezárt',ongoing:false,incomplete:false,issues:[],first:time('8:02','08:02:14'),last:time('16:48','16:48:09'),manual:false,none:false,undo:false,lunch:{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19},pairs:[{id:'short',from:time('10:16','10:16:03'),to:time('10:20','10:20:09'),minutes:4},{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19}],sections:[{date:'2026.10.16',from:time('8:02','08:02:14'),to:time('11:32','11:32:05'),duration:'03:30',open:false,copy:'2026.10.16\t08:02:14\t11:32:05'},{date:'2026.10.16',from:time('11:51','11:51:34'),to:time('16:48','16:48:09'),duration:'04:57',open:false,copy:'2026.10.16\t11:51:34\t16:48:09'}],copy:'2026.10.16\t08:02:14\t11:32:05\r\n2026.10.16\t11:51:34\t16:48:09',eventCopy:'events',events:[]}]};
   const clone = value => JSON.parse(JSON.stringify(value));
-  for(const day of state.days)day.sections.forEach((s,i)=>{s.id=day.key+'|'+i;s.comment='';s.durationExact=i?'4:56:35':'3:29:51';s.excelCells=[s.date,s.from.exact,s.to.exact,s.durationExact,'3,5',''];});
+  for(const day of state.days)day.sections.forEach((s,i)=>{s.id=day.key+'|'+i;s.comment='';s.durationExact=i?'4:56:35':'3:29:51';});
   function applyActivityReply(message) {
     state.activity.enabled=message.data.activityEnabled;
     state.activity.running=message.data.activityEnabled;
@@ -23,7 +23,7 @@ const {parseHTML} = require('linkedom');
     day.copy=day.sections.map(s=>s.copy).join('\r\n');
   }
 
-  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'commentsPending':case 'commentsFailed':break;case 'sectionComment':{if(failComment)throw Error('Comment save failed');const row=state.days.flatMap(d=>d.sections).find(s=>s.id===message.data.sectionId);row.comment=message.data.comment;row.excelCells[5]=row.comment;break;}case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:[]};break;case 'commit':writes++;result={state:clone(state),backup:'C:\\test\\backup.xlsx'};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'meeting':{
+  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'commentsPending':case 'commentsFailed':break;case 'sectionComment':{if(failComment)throw Error('Comment save failed');const row=state.days.flatMap(d=>d.sections).find(s=>s.id===message.data.sectionId);row.comment=message.data.comment;break;}case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:[]};break;case 'commit':writes++;result={state:clone(state),backup:'C:\\test\\backup.xlsx'};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'meeting':{
       const day=state.days[0];meetingUndo=clone(day);day.manualMeeting=message.data.value!==null;day.noMeeting=message.data.value==='none';
       const pair=message.data.value===null?day.pairs[0]:day.pairs.find(p=>p.id===message.data.value);
       day.meeting=pair?{id:pair.id,from:clone(pair.from),to:clone(pair.to),minutes:pair.minutes}:null;
@@ -127,23 +127,27 @@ const {parseHTML} = require('linkedom');
     const count=calls.filter(c=>c.command==='settings').length;await click('[data-save]');
     assert.equal(calls.filter(c=>c.command==='settings').length,count);assert.match(node('[data-dialog-error]').textContent,/HH:mm/);await click('[data-cancel]');
   });
-  await check('Expandable work-section table precedes raw events and copies individual fields and all six Excel columns',async()=>{
+  await check('Expandable work-section table precedes raw events and copies individual fields and only three time columns',async()=>{
     state.days[0].sections[1].open=true;await click('[data-refresh]');
     const details=node('[data-section-details]');assert.match(details.querySelector('summary').textContent,/Work sections \(2\)/);
     const children=[...details.parentElement.children];assert.ok(children.indexOf(details)<children.findIndex(n=>n.querySelector('summary')?.textContent.startsWith('All log events')));
     assert.equal(details.querySelectorAll('tbody tr').length,2);assert.equal(details.querySelectorAll('[data-section-copy]:disabled').length,1);
     assert.equal(details.querySelectorAll('[data-comment-copy]').length,2);
+    const status=node('[data-comment-status="2026-10-16|0"]');
+    assert.equal(status.parentElement.className,'cu-comment-actions');
+    assert.equal(status.previousElementSibling.getAttribute('data-comment-copy'),'2026-10-16|0');
+    assert.equal(status.parentElement.parentElement.querySelector('textarea').getAttribute('data-section-comment'),'2026-10-16|0');
     details.open=true;details.dispatchEvent(new window.Event('toggle',{bubbles:true}));await click('[data-refresh]');assert.equal(node('[data-section-details]').hasAttribute('open'),true);
-    await click('[data-section-copy="2026-10-16|0"]');assert.equal(clipboard,'2026.10.16\t08:02:14\t11:32:05\t3:29:51\t3,5\t');
+    await click('[data-section-copy="2026-10-16|0"]');assert.equal(clipboard,'2026.10.16\t08:02:14\t11:32:05');
     await click('[data-copy="3:29:51"]');assert.equal(clipboard,'3:29:51');state.days[0].sections[1].open=false;
   });
-  await check('Comments save without replacing the editor, survive refresh, and reach preview and TSV with exact quoting',async()=>{
+  await check('Comments save without replacing the editor, survive refresh, and reach preview while row copy preserves Excel formulas',async()=>{
     const editor=node('[data-section-comment="2026-10-16|0"]');const comment='Árvíztűrő "review"\tnext\nsecond line';
     editor.value=comment;editor.dispatchEvent(new window.Event('input',{bubbles:true}));await flush();await flush();
     assert.equal(node('[data-section-comment="2026-10-16|0"]'),editor);assert.equal(calls.findLast(c=>c.command==='sectionComment').data.comment,comment);
     assert.equal(node('[data-comment-status="2026-10-16|0"]').textContent,'Saved');
     await click('[data-comment-copy="2026-10-16|0"]');assert.equal(clipboard,comment);
-    await click('[data-section-copy="2026-10-16|0"]');assert.ok(clipboard.endsWith('"Árvíztűrő ""review""\tnext\nsecond line"'));
+    await click('[data-section-copy="2026-10-16|0"]');assert.equal(clipboard,'2026.10.16\t08:02:14\t11:32:05');
     await click('[data-refresh]');assert.equal(node('[data-section-comment="2026-10-16|0"]').value,comment);
     await click('[data-append]');assert.ok(node('[data-import]').textContent.includes(comment));await click('[data-close-plan]');
     const updated=node('[data-section-comment="2026-10-16|0"]');updated.value='Hossz';updated.dispatchEvent(new window.Event('input',{bubbles:true}));

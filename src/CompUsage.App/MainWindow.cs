@@ -340,8 +340,8 @@ public sealed class MainWindow : Window
         date = display.Date(DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(time.Value, TimeZoneInfo.Local).DateTime))
     };
     private object RowSnapshot(WorkInterval row) => new { id = row.Id, date = display.Date(row.Date), from = TimeValue(row.From),
-        to = TimeValue(row.To, true), duration = display.Duration(row.Duration), durationExact = ExcelDisplay.ExactDuration(row.Duration),
-        comment = row.Comment, excelCells = display.ExcelCells(row), excelCopy = display.CopyExcelRow(row),
+        to = TimeValue(row.To, true), duration = ExcelDisplay.RoundedDuration(row.Duration), durationExact = ExcelDisplay.ExactDuration(row.Duration),
+        comment = row.Comment,
         open = row.Open, copy = display.CopyRow(row) };
     private object PlanSnapshot(WorkbookPlan plan, string token)
     {

@@ -64,9 +64,8 @@
     if (!state.settings.ignoreDailyMeeting) return '';
     return `<div class="cu-meeting-summary" data-meeting-summary><strong>${icon('users')} Napi meeting:</strong>${day.meeting?`<span>${time(day.meeting.from,'Meeting kezdete',true,day.date)} – ${time(day.meeting.to,'Meeting vége',true,day.date)}</span><span class="cu-pill">${day.manualMeeting?'Kézi választás':'Becsült'}</span><span class="cu-sub">Munkaidőnek számít</span>`:`<span class="cu-sub">${day.noMeeting?'Nem volt napi meeting':'Nincs megfelelő meetingpár'}</span>`}</div>`;
   }
-  function tsvCell(value) { return /[\t\r\n"]/.test(value)?'"'+value.replace(/"/g,'""')+'"':value; }
   function sectionRows(day) {
-    return `<details class="cu-section-details" data-section-details="${day.key}" ${sectionDetails.has(day.key)?'open':''}><summary>Munkaszakaszok (${day.sections.length})</summary><p class="cu-note">A teljes sor másolása: dátum, feloldás, zárolás, időtartam, óraszám, megjegyzés (Excel A–F).</p><div class="cu-table-wrap"><table class="cu-sections-table"><thead><tr><th></th><th>Dátum</th><th>Feloldás</th><th>Zárolás</th><th>Hossz</th><th>Megjegyzés</th></tr></thead><tbody>${day.sections.map(s=>`<tr data-section-row="${esc(s.id)}"><td><button class="cu-quiet" data-section-copy="${esc(s.id)}" ${s.open?'disabled':''} aria-label="Teljes Excel-sor másolása" title="Teljes Excel-sor másolása">${icon('copy')}</button></td><td><span class="cu-exact">${field(s.date,'Dátum')}${copyButton(s.date,'Dátum')}</span></td><td>${time(s.from,'Feloldás',true,day.date)}</td><td>${s.open?'<span class="cu-sub">folyamatban</span>':time(s.to,'Zárolás',true,day.date)}</td><td><span class="cu-exact">${field(s.duration,'Időtartam')}${copyButton(s.durationExact||s.duration,'Időtartam')}</span>${s.open?'<span class="cu-sub">eddig</span>':''}</td><td class="cu-comment-cell"><div class="cu-comment-editor"><textarea rows="2" maxlength="32767" data-section-comment="${esc(s.id)}" aria-label="Munkaszakasz megjegyzése" placeholder="Megjegyzés a Details oszlophoz">${esc(commentDrafts.get(s.id)??s.comment??'')}</textarea><button class="cu-quiet" data-comment-copy="${esc(s.id)}" aria-label="Megjegyzés másolása">${icon('copy')}</button></div><span class="cu-sub" data-comment-status="${esc(s.id)}">${commentDrafts.has(s.id)?'Mentés...':'Mentve'}</span></td></tr>`).join('')}</tbody></table></div></details>`;
+    return `<details class="cu-section-details" data-section-details="${day.key}" ${sectionDetails.has(day.key)?'open':''}><summary>Munkaszakaszok (${day.sections.length})</summary><p class="cu-note">A sor másolása csak a dátumot, feloldást és zárolást írja az Excel A–C oszlopaiba. A hossz és óraszám képletei megmaradnak; a megjegyzés külön másolható.</p><div class="cu-table-wrap"><table class="cu-sections-table"><thead><tr><th></th><th>Dátum</th><th>Feloldás</th><th>Zárolás</th><th>Hossz</th><th>Megjegyzés</th></tr></thead><tbody>${day.sections.map(s=>`<tr data-section-row="${esc(s.id)}"><td><button class="cu-quiet" data-section-copy="${esc(s.id)}" ${s.open?'disabled':''} aria-label="Időadatok másolása (Excel A–C)" title="Időadatok másolása (Excel A–C)">${icon('copy')}</button></td><td><span class="cu-exact">${field(s.date,'Dátum')}${copyButton(s.date,'Dátum')}</span></td><td>${time(s.from,'Feloldás',true,day.date)}</td><td>${s.open?'<span class="cu-sub">folyamatban</span>':time(s.to,'Zárolás',true,day.date)}</td><td><span class="cu-exact">${field(s.duration,'Időtartam')}${copyButton(s.durationExact||s.duration,'Időtartam')}</span>${s.open?'<span class="cu-sub">eddig</span>':''}</td><td class="cu-comment-cell"><div class="cu-comment-editor"><textarea rows="2" maxlength="32767" data-section-comment="${esc(s.id)}" aria-label="Munkaszakasz megjegyzése" placeholder="Megjegyzés a Details oszlophoz">${esc(commentDrafts.get(s.id)??s.comment??'')}</textarea><div class="cu-comment-actions"><button class="cu-quiet" data-comment-copy="${esc(s.id)}" aria-label="Megjegyzés másolása">${icon('copy')}</button><span class="cu-sub" data-comment-status="${esc(s.id)}">${commentDrafts.has(s.id)?'Mentés...':'Mentve'}</span></div></div></td></tr>`).join('')}</tbody></table></div></details>`;
   }
   function findSection(id) { return state.days.flatMap(day=>day.sections).find(s=>s.id===id); }
   function commentStatus(id,text) {
@@ -136,7 +135,7 @@
     if(e.target.matches('.cu-value')){if(e.target.selectionStart===e.target.selectionEnd)e.target.select();return;}
     const button=e.target.closest('button');if(!button||button.disabled||busy)return;
     const d=button.dataset;
-    if('sectionCopy'in d){perform(()=>{const s=findSection(d.sectionCopy);if(!s||s.open)return;return copy(s.excelCells?s.excelCells.map(tsvCell).join('\t'):s.copy);});return;}
+    if('sectionCopy'in d){perform(()=>{const s=findSection(d.sectionCopy);if(!s||s.open)return;return copy(s.copy);});return;}
     if('commentCopy'in d){perform(()=>copy(findSection(d.commentCopy)?.comment||''));return;}
     if('copy'in d){perform(()=>copy(d.copy));return;}
     if('expand'in d){expanded.has(d.expand)?expanded.delete(d.expand):expanded.add(d.expand);render();root.querySelector(`[data-expand="${d.expand}"]`).focus({preventScroll:true});saveView();return;}
@@ -164,7 +163,7 @@
   root.addEventListener('input',e=>{const t=e.target;
     if(t.matches('[data-section-comment]')){
       const s=findSection(t.dataset.sectionComment);if(!s)return;
-      s.comment=t.value;if(s.excelCells)s.excelCells[5]=t.value;commentDrafts.set(s.id,t.value);
+      s.comment=t.value;commentDrafts.set(s.id,t.value);
       plan=null;root.querySelector('[data-import]').innerHTML='';commentStatus(s.id,'Mentés...');
       flushSectionComments().catch(ex=>error(ex.message));return;
     }

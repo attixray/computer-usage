@@ -131,15 +131,23 @@ Check("Section comment identity survives an open interval closing and does not d
     var changed=WorkReports.Build(entries,settings with {ExpectedLunch=new(9,0)},new Dictionary<string,string>{{"2026-10-19","none"}},now,zone,comments:notes).Single();
     True(changed.Sections.All(s=>s.Id!=section.Id||s.Comment==notes[section.Id]));
 });
-Check("Excel row copy has six columns and preserves regional hours plus quoted multiline comments", () =>
+Check("Section row copy has only three time columns, leaving Excel duration formulas and comments untouched", () =>
 {
     var row=new WorkInterval(new(2026,10,16),At(16,"08:00:01"),At(16,"09:30:03")){Comment="Árvíz\t\"review\"\nnext"};
     var excel=new ExcelDisplay(new("yyyy.mm.dd","h:mm","h:mm"),huCulture,zone);
-    var cells=excel.ExcelCells(row);Equal(6,cells.Length);Equal("1:30:02",cells[3]);True(cells[4].Contains(','));
     Equal("2026.10.16\t08:00:01\t09:30:03",excel.CopyRow(row));
-    True(excel.CopyExcelRow(row).EndsWith("\"Árvíz\t\"\"review\"\"\nnext\"",StringComparison.Ordinal));
+    Equal(3,excel.CopyRow(row).Split('\t').Length);Equal("Árvíz\t\"review\"\nnext",row.Comment);
     Throws<ArgumentException>(()=>_ = row with {Comment=new string('x',32768)});
     Throws<ArgumentException>(()=>_ = row with {Comment="bad\0text"});
+});
+Check("Displayed section duration rounds to minutes, including hour carry, without changing exact copy values", () =>
+{
+    foreach(var item in new[]{(Seconds:1468.1720969,Expected:"0:24"),(Seconds:1470.0,Expected:"0:25"),
+        (Seconds:3590.0,Expected:"1:00"),(Seconds:12787.5646658,Expected:"3:33"),(Seconds:92.3664264,Expected:"0:02"),
+        (Seconds:90030.0,Expected:"25:01")})
+        Equal(item.Expected,ExcelDisplay.RoundedDuration(TimeSpan.FromSeconds(item.Seconds)));
+    var duration=TimeSpan.FromSeconds(1468.1720969);
+    Equal("0:24:28",ExcelDisplay.ExactDuration(duration));
 });
 WorkReport MeetingReport(IEnumerable<LockEvent> entries, AppSettings? config=null, string? choice=null) =>
     WorkReports.Build(entries,config??meetingSettings,lunches,now,zone,

@@ -17,11 +17,12 @@ public sealed class ExcelDisplay(WorkbookFormats formats, CultureInfo culture, T
         Presentation.Time(row.From, zone, true), Presentation.Time(row.To, zone, true));
     public static string ExactDuration(TimeSpan value) => string.Create(CultureInfo.InvariantCulture,
         $"{(long)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}");
-    public string[] ExcelCells(WorkInterval row) => [Date(row.Date), Presentation.Time(row.From, zone, true),
-        Presentation.Time(row.To, zone, true), ExactDuration(row.Duration), row.Duration.TotalHours.ToString("G15", culture), row.Comment];
-    public string CopyExcelRow(WorkInterval row) => string.Join('\t', ExcelCells(row).Select(TsvCell));
-    public static string TsvCell(string value) => value.IndexOfAny(['\t', '\r', '\n', '"']) >= 0
-        ? "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"" : value;
+    public static string RoundedDuration(TimeSpan value)
+    {
+        var minutes = value.Ticks / TimeSpan.TicksPerMinute
+            + (value.Ticks % TimeSpan.TicksPerMinute >= TimeSpan.TicksPerMinute / 2 ? 1 : 0);
+        return string.Create(CultureInfo.InvariantCulture,$"{minutes / 60}:{minutes % 60:00}");
+    }
 
     private string Format(object value, string code)
     {

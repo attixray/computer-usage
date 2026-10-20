@@ -4,6 +4,8 @@ window.i18n = (() => {
   const en = {
     'Munkaszakaszok':'Work sections','Megjegyzés':'Comment','Hossz':'Duration','eddig':'so far',
     'Teljes Excel-sor másolása':'Copy full Excel row','Megjegyzés másolása':'Copy comment',
+    'Időadatok másolása (Excel A–C)':'Copy time values (Excel A–C)',
+    'A sor másolása csak a dátumot, feloldást és zárolást írja az Excel A–C oszlopaiba. A hossz és óraszám képletei megmaradnak; a megjegyzés külön másolható.':'Row copy fills only Date, From and To in Excel columns A–C. Duration and hours formulas are preserved; copy the comment separately.',
     'Munkaszakasz megjegyzése':'Work-section comment','Megjegyzés a Details oszlophoz':'Comment for the Details column',
     'Mentés...':'Saving...','Mentve':'Saved','A mentés nem sikerült':'Save failed',
     'A teljes sor másolása: dátum, feloldás, zárolás, időtartam, óraszám, megjegyzés (Excel A–F).':'Full-row copy: date, unlock, lock, duration, hours, comment (Excel A–F).',
