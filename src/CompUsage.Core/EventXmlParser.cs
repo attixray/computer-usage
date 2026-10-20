@@ -10,7 +10,7 @@ public static class EventXmlParser
         var root = XElement.Parse(xml);
         var ns = root.Name.Namespace;
         var system = root.Element(ns + "System");
-        if (!int.TryParse(system?.Element(ns + "EventID")?.Value, out var id) || id is not (4800 or 4801))
+        if (!int.TryParse(system?.Element(ns + "EventID")?.Value, out var id) || id is not (4800 or 4801 or 4778 or 4779))
             return null;
 
         var timestamp = system?.Element(ns + "TimeCreated")?.Attribute("SystemTime")?.Value;
@@ -26,7 +26,11 @@ public static class EventXmlParser
         if (!long.TryParse(system?.Element(ns + "EventRecordID")?.Value, out var recordId))
             throw new FormatException("Az eseményből hiányzik a naplóazonosító.");
 
+        // Session reconnect/disconnect records carry an account and logon ID, but no SID or numeric session ID.
+        // The reader must verify the account before assigning the requested user's SID.
+        var session = id is 4778 or 4779;
         return new LockEvent(recordId, time.ToUniversalTime(), id, Field("TargetUserSid"),
-            Field("TargetUserName"), Field("TargetDomainName"), Field("SessionId"), Field("TargetLogonId"));
+            Field(session ? "AccountName" : "TargetUserName"), Field(session ? "AccountDomain" : "TargetDomainName"),
+            Field("SessionId"), Field(session ? "LogonID" : "TargetLogonId"));
     }
 }

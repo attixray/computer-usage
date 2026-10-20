@@ -4,7 +4,7 @@ A local Windows work-log application based on the current user's lock and unlock
 
 ## Features
 
-- Up to 60 days of Security log events, with a local cache of previously read events.
+- Up to 60 days of Security log events, with a local cache of previously read events. Session reconnect/disconnect events (4778/4779) cover RDP and console switches that do not produce a lock/unlock (4800/4801).
 - Configurable workday boundary (04:00), expected lunch (11:30), minimum lunch duration (15 minutes), and work-section split threshold (10 minutes).
 - Automatic lunch suggestion, manual pair selection, no-lunch selection, and undo.
 - Large, selectable dates/times; exact-second copy icons; individual section and whole-day copying as headerless Date/From/To TSV.
@@ -21,13 +21,13 @@ A local Windows work-log application based on the current user's lock and unlock
 
 ## Install and run
 
-Run `CompUsage-1.0.5-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
+Run the versioned `CompUsage-<version>-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
 
 Setup registers a per-user Windows sign-in entry for the background collector and invokes it independently of the optional UI launch. Tracking defaults to disabled, so the collector exits without sampling until enabled in Settings → Time rules. Once enabled, it runs immediately, survives closing the window and starts again at subsequent sign-ins without opening the app. Disabling tracking stops it; the startup entry remains but exits immediately while disabled. Upgrade and uninstall stop the collector before replacing/removing its files; uninstall removes the startup entry and keeps saved data. The portable build can collect after enabling it in Settings, but Setup is needed to register automatic startup.
 
 The application runs as the current user. Opening the app and refreshing never request UAC or start an elevated reader. If the Security log cannot be read, the app keeps showing saved data with a permission warning. An inaccessible audit-policy query is shown as unknown rather than disabled, and ordinary settings saves preserve that unknown state.
 
-Settings → Time rules → Set up read access is an explicit, one-time Windows permission change. Approve its UAC prompt using the same Windows account. It grants that account read access to the **entire Security event log** (`EVT_READ_ACCESS`, 0x1) and system audit-policy queries (`AUDIT_QUERY_SYSTEM_POLICY`, 0x2). It does not grant log clearing, audit modification, administrator membership or a persistent security privilege. The app still processes only that user's 4800/4801 events. Existing ACL entries are preserved; explicit denies are not overridden. These account permissions persist across app upgrades/uninstall, and company policy can deny or revoke them. No installer or startup path applies this permission change automatically.
+Settings → Time rules → Set up read access is an explicit, one-time Windows permission change. Approve its UAC prompt using the same Windows account. It grants that account read access to the **entire Security event log** (`EVT_READ_ACCESS`, 0x1) and system audit-policy queries (`AUDIT_QUERY_SYSTEM_POLICY`, 0x2). It does not grant log clearing, audit modification, administrator membership or a persistent security privilege. The app processes only that user's 4800/4801 events and account-verified 4778/4779 session transitions. Existing ACL entries are preserved; explicit denies are not overridden. These account permissions persist across app upgrades/uninstall, and company policy can deny or revoke them. No installer or startup path applies this permission change automatically.
 
 Changing Windows lock/unlock auditing can also request UAC when the current token lacks the required rights. The elevated helper is limited to explicitly requested Windows configuration operations; UI, activity collection, reading and workbook operations stay unelevated. After read access is configured, refresh always verifies it with the main process's normal token.
 
@@ -35,7 +35,9 @@ In Settings → Excel, select your `.xlsx` workbook. The `Details` worksheet mus
 
 ## Time rules
 
-The first observed unlock and last observed lock are shown for each workday. Lunch candidates must meet the minimum duration, last at most two hours, and begin within two hours of the expected lunch time; the closest start wins. A manual choice survives changes to those parameters.
+The first observed unlock/connection and last observed lock/disconnection are shown for each workday. Lunch candidates must meet the minimum duration, last at most two hours, and begin within two hours of the expected lunch time; the closest start wins. A manual choice survives changes to those parameters.
+
+The reader includes Security events 4778/4779 from the same auditing subcategory as 4800/4801. A reconnect opens a work interval and a disconnect closes it, including an RDP-to-console handover with no 4801 event. These records lack a SID and numeric session ID: the full domain/account must match the requested SID's Windows account before caching, and a numeric session is recovered only from an unambiguous matching SID/logon ID. A real lock/unlock within five seconds of a matching session transition takes precedence, preserving its exact time and existing lunch-pair identity. An intervening opposite transition prevents coalescing. All original records remain in the expandable event list and its copy output. Repeated genuine lock events and ambiguous or multiple sessions still require review. No new audit-policy setting or background collector is needed for this support; missing historical audit events cannot be recreated.
 
 Breaks strictly longer than the split threshold are excluded and split work rows. Shorter ordinary breaks count as work. The selected lunch break is always excluded, including a short manual lunch. Calculations use the original instants, not formatted display text. Workday grouping uses the local Windows time zone and handles daylight-saving boundaries.
 

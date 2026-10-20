@@ -29,14 +29,16 @@ public static class WorkReports
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
         var firstDate = today.AddDays(1 - settings.HistoryDays);
-        return ActivityHistory.Apply(events, activity ?? [], settings, zone).Where(e => e.Timestamp <= now && e.EventId is 4800 or 4801)
-            .DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
+        var raw = SessionEvents.ResolveSessions(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
+            .DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId));
+        var originalDays = raw.GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
+        return ActivityHistory.Apply(SessionEvents.WorkTransitions(raw), activity ?? [], settings, zone)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
-            .Select(g => BuildDay(g.Key, g.ToArray(), settings, lunches, now, zone, gaps ?? [])).ToArray();
+            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, now, zone, gaps ?? [])).ToArray();
     }
 
-    private static WorkReport BuildDay(DateOnly date, LockEvent[] list, AppSettings settings,
+    private static WorkReport BuildDay(DateOnly date, LockEvent[] list, LockEvent[] raw, AppSettings settings,
         IReadOnlyDictionary<string, string> lunches, DateTimeOffset now, TimeZoneInfo zone, IEnumerable<LoggingGap> gaps)
     {
         var ongoing = date == WorkDayClock.GetDate(now, settings.DayStart, zone);
@@ -82,7 +84,7 @@ public static class WorkReports
             }
             if (to > from) sections.Add(new(date, from, to, ongoing && !list[^1].IsLock));
         }
-        return new(date, list, pairs, first, last, lunch, manual, chosen == "none", ongoing, issues, sections);
+        return new(date, raw, pairs, first, last, lunch, manual, chosen == "none", ongoing, issues, sections);
     }
 }
 

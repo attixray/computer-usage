@@ -2,6 +2,11 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Munkamenet csatlakoztatása':'Session connected','Munkamenet leválasztása':'Session disconnected',
+    'Első kapcsolódás':'First connection','Első észlelt kapcsolódás':'First observed connection',
+    'Utolsó leválasztás':'Last disconnect','Legutóbbi leválasztás':'Most recent disconnect',
+    'Nincs aktivitási adat · leválasztás alapján':'No activity data · using disconnect time',
+    'A kapcsolódás munkakezdésnek, a leválasztás szünetkezdetnek számít. Az egyidejű lock/unlock csak egyszer számít.':'Connecting starts work; disconnecting starts a break. Concurrent lock/unlock events count once.',
     'A Windows Security napló olvasásához nincs jogosultság.':'Windows Security log read access is missing.',
     'A mentett adatok látszanak, de a napló nem frissült. Az egyszeri olvasási beállítás után a frissítés nem kér rendszergazdai jogot.':'Saved data is shown, but the log was not refreshed. After one-time read-access setup, refreshing does not request administrator rights.',
     'Olvasási jogosultság beállítása':'Set up read access',

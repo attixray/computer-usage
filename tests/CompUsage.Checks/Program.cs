@@ -39,6 +39,76 @@ Check("Sixty-day range includes exactly the configured work dates", () => { var 
 Check("DST gaps and repeated hours preserve real elapsed duration", () => { var spring=WorkDayClock.At(new(2026,3,29),new(2,30),zone);Equal(3,TimeZoneInfo.ConvertTime(spring,zone).Hour);var early=new DateTimeOffset(2026,10,25,2,30,0,TimeSpan.FromHours(2));var late=new DateTimeOffset(2026,10,25,2,30,0,TimeSpan.FromHours(1));Equal(TimeSpan.FromHours(1),late-early);Equal(early,WorkDayClock.At(new(2026,10,25),new(2,30),zone)); });
 Check("XML parser filters IDs and retains SID, session and UTC precision", () => { var xml="<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\"><System><EventID>4801</EventID><EventRecordID>42</EventRecordID><TimeCreated SystemTime=\"2026-10-19T07:45:56.969Z\"/></System><EventData><Data Name=\"TargetUserSid\">S-1-5-21-1</Data><Data Name=\"SessionId\">2</Data><Data Name=\"TargetLogonId\">0x3</Data></EventData></Event>";var e=EventXmlParser.Parse(xml)!;Equal(42L,e.RecordId);Equal(969,e.Timestamp.Millisecond);Equal("S-1-5-21-1|2|0x3",e.SessionKey);True(EventXmlParser.Parse(xml.Replace("4801","4624")) is null); });
 
+Check("Reconnect XML retains the account and logon ID without inventing a SID or numeric session", () =>
+{
+    const string xml = "<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\"><System><EventID>4778</EventID><EventRecordID>43</EventRecordID><TimeCreated SystemTime=\"2026-10-19T05:05:21.677Z\"/></System><EventData><Data Name=\"AccountName\">Test</Data><Data Name=\"AccountDomain\">LOCAL</Data><Data Name=\"LogonID\">0x1</Data><Data Name=\"SessionName\">RDP-Tcp#7</Data></EventData></Event>";
+    var entry = EventXmlParser.Parse(xml)!;
+    Equal("Test", entry.UserName); Equal("LOCAL", entry.Domain); Equal("0x1", entry.LogonId);
+    Equal("", entry.UserSid); Equal("", entry.SessionId); True(!entry.IsLock && entry.IsSessionTransition);
+    True(EventXmlParser.Parse(xml.Replace("4778", "4779"))!.IsLock);
+});
+Check("Session events require the full current account, while lock events require the exact SID", () =>
+{
+    var entry = Event(16, "08:00", false) with { EventId = 4778, UserSid = "" };
+    var selected = SessionEvents.ForUser([entry, entry with {Domain="OTHER"}, entry with {UserName="Other"},
+        entry with {UserSid="different-sid"}, entry with {EventId=4801}], "S-1-5-21-1", @"local\test").ToArray();
+    Equal(1, selected.Length); Equal("S-1-5-21-1", selected[0].UserSid);
+    Equal(1, SessionEvents.ForUser([Event(16,"08:00",false)], "S-1-5-21-1", @"LOCAL\Test").Count());
+});
+Check("RDP morning, disconnect and console reconnect fill the missing unlock without double counting", () =>
+{
+    var unlock = Event(19, "07:05:23", false);
+    var locked = Event(19, "07:29:51", true);
+    LockEvent[] entries = [unlock with {RecordId=id++,EventId=4778,Timestamp=At(19,"07:05:21"),SessionId=""},
+        unlock, locked with {RecordId=id++,EventId=4779,Timestamp=At(19,"07:29:50"),SessionId=""}, locked,
+        unlock with {RecordId=id++,EventId=4778,Timestamp=At(19,"08:13:51"),SessionId=""},
+        Event(19,"09:29:43",true), Event(19,"09:41:18",false)];
+    var day = Report(entries.Concat(entries));
+    True(!day.Incomplete && day.Ongoing); Equal(7, day.Events.Count); Equal(unlock.RecordId, day.First!.RecordId);
+    Equal(2, day.Pairs.Count); Equal(4778, day.Pairs[0].Unlock.EventId);
+    Equal(locked.Timestamp, day.Pairs[0].Lock.Timestamp); Equal(At(19,"08:13:51"), day.Pairs[0].Unlock.Timestamp);
+    Equal(3, day.Sections.Count); Equal(unlock.Timestamp, day.Sections[0].From);
+    Equal(At(19,"08:13:51"), day.Sections[1].From); True(day.Sections[^1].Open);
+});
+Check("Duplicate connection records preserve an existing manual lunch pair and original second precision", () =>
+{
+    var entries = Day(16); var before = Report(entries); lunches["2026-10-16"] = before.Pairs[1].Id;
+    var sessionCopies = entries.Select(e => e with {RecordId=id++,EventId=e.IsLock?4779:4778,
+        Timestamp=e.Timestamp.AddMilliseconds(-600),SessionId=""});
+    var day = Report(entries.Concat(sessionCopies));
+    True(!day.Incomplete); Equal(before.Pairs[1].Id, day.Lunch!.Id); Equal(before.Sections.Count, day.Sections.Count);
+    Equal(Presentation.CopyRow(before.Sections[0],zone), Presentation.CopyRow(day.Sections[0],zone));
+    lunches.Clear();
+});
+Check("Deduplication cannot skip a real intervening opposite transition or cross sessions", () =>
+{
+    var connected = Event(16,"08:00",false) with {EventId=4778};
+    LockEvent[] entries = [connected, Event(16,"08:00:01",true), Event(16,"08:00:02",false),Event(16,"17:00",true)];
+    Equal(4, SessionEvents.WorkTransitions(entries).Count); True(!Report(entries).Incomplete);
+    var other = Event(16,"08:00:01",false) with {SessionId="2"};
+    Equal(2, SessionEvents.WorkTransitions([connected,other]).Count);
+    Equal(2, SessionEvents.WorkTransitions([connected,other with {SessionId="1",LogonId="0x2"}]).Count);
+    Equal(2, SessionEvents.WorkTransitions([connected,other with {SessionId="1",UserSid="other"}]).Count);
+});
+Check("Only unambiguous session IDs are recovered and unknown sessions stay marked for review", () =>
+{
+    var connected = Event(16,"08:00",false) with {EventId=4778,SessionId=""};
+    var native = Event(16,"17:00",true);
+    Equal("1", SessionEvents.ResolveSessions([connected,native])[0].SessionId);
+    Equal("", SessionEvents.ResolveSessions([connected,native,native with {SessionId="2"}])[0].SessionId);
+    True(Report([connected with {LogonId="0x2"},native]).Incomplete);
+    Equal("1", SessionEvents.ResolveSessions([connected with {LogonId="0X1"},native])[0].SessionId);
+});
+Check("A session-only day supports the existing break threshold without fabricated lock events", () =>
+{
+    LockEvent[] entries = [Event(16,"08:00",false) with {EventId=4778,SessionId=""},
+        Event(16,"10:00",true) with {EventId=4779,SessionId=""},
+        Event(16,"10:10",false) with {EventId=4778,SessionId=""},Event(16,"17:00",true) with {EventId=4779,SessionId=""}];
+    var day = Report(entries); True(!day.Incomplete); Equal(1,day.Sections.Count); Equal(4778,day.First!.EventId);
+    Equal(4779,day.Last!.EventId); entries[2] = entries[2] with {Timestamp=entries[2].Timestamp.AddSeconds(1)};
+    Equal(2,Report(entries).Sections.Count);
+});
+
 Check("Activity tracking defaults off and validates its optional time source", () =>
 {
     True(!new ActivityConfiguration().Enabled);

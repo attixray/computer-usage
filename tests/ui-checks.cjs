@@ -85,5 +85,21 @@ const {parseHTML} = require('linkedom');
   await check('Excel preview never writes until the commit button is pressed',async()=>{await click('[data-append]');assert.equal(writes,0);assert.ok(document.querySelector('[data-commit]'));await click('[data-commit]');assert.equal(writes,1);assert.equal(calls.findLast(c=>c.command==='commit').data.token,'plan');});
   await check('Refresh preserves expanded days and the current scroll position',async()=>{window.scrollY=150;await click('[data-refresh]');assert.equal(window.scrollY,150);assert.equal(node('[data-expand]').getAttribute('aria-expanded'),'true');});
   await check('Localization never rewrites clipboard attributes or user-entered paths',()=>{const div=document.createElement('div');div.innerHTML='<input value="C:\\Munkaidőnapló\\x.xlsx"><button data-copy="Dátum">Dátum</button>';window.i18n.apply(div,'en');assert.equal(div.querySelector('button').textContent,'Date');assert.equal(div.querySelector('button').getAttribute('data-copy'),'Dátum');assert.equal(div.querySelector('input').getAttribute('value'),'C:\\Munkaidőnapló\\x.xlsx');});
+  await check('Session-only endpoints have accurate labels and localized raw events without changing exact copy data',async()=>{
+    const day=state.days[0];day.hasSessionEvents=true;day.firstFromSession=true;day.lastFromSession=true;day.lastFromActivity=false;
+    day.events=[{time:time('8:02','08:02:14'),eventId:4778,label:'Munkamenet csatlakoztatása',isLock:false},
+      {time:time('16:48','16:48:09'),eventId:4779,label:'Munkamenet leválasztása',isLock:true}];
+    day.eventCopy='2026.10.16\t08:02:14\tMunkamenet csatlakoztatása\t4778';
+    await click('[data-refresh]');
+    assert.match(document.body.textContent,/First connection/);assert.match(document.body.textContent,/Last disconnect/);
+    assert.match(document.body.textContent,/Session connected/);assert.match(document.body.textContent,/Session disconnected/);
+    assert.match(document.body.textContent,/Concurrent lock\/unlock events count once/);
+    await click('[data-copy="08:02:14"]');assert.equal(clipboard,'08:02:14');
+    const logButton=[...document.querySelectorAll('[data-copy]')].find(b=>b.getAttribute('data-copy')===day.eventCopy);
+    assert.ok(logButton);logButton.dispatchEvent(new window.Event('click',{bubbles:true}));await flush();assert.equal(clipboard,day.eventCopy);
+    state.settings.language='hu';await click('[data-refresh]');
+    assert.match(document.body.textContent,/Első kapcsolódás/);assert.match(document.body.textContent,/Utolsó leválasztás/);
+    assert.match(document.body.textContent,/Munkamenet csatlakoztatása/);
+  });
   console.log(`${count} DOM/bridge checks passed (no browser, native clipboard, log, or user workbook access).`);
 })().catch(error=>{console.error(error);process.exitCode=1;});
