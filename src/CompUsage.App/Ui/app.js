@@ -1,7 +1,8 @@
 'use strict';
 (() => {
   const root = document.getElementById('compusage-cards-preview');
-  const pending = new Map();
+  const pending = new Map(), commentDrafts = new Map(), sectionDetails = new Set();
+  let savingComments = null;
   let sequence = 0, state, expanded = new Set(), draft = null, tab = 'time', plan = null;
   let toastTimer, scrollTimer, busy = false, started = false;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -18,7 +19,9 @@
     });
   }
   window.chrome.webview.addEventListener('message', event => {
-    const message = event.data, call = pending.get(message.id);
+    const message = event.data;
+    if(message.command==='saveCommentsBeforeClose'){flushSectionComments().catch(ex=>error(ex.message));return;}
+    const call = pending.get(message.id);
     if (!call) return;
     pending.delete(message.id); clearTimeout(call.timeout);
     message.ok ? call.resolve(message.result) : call.reject(new Error(message.error));
@@ -40,7 +43,7 @@
   async function perform(action, success = '') {
     if (busy) return;
     busy = true; root.querySelector('[data-busy]').hidden = false;
-    try { await action(); if (success) notify(success); }
+    try { await flushSectionComments(); await action(); if (success) notify(success); }
     catch (ex) { error(ex.message); }
     finally { busy = false; root.querySelector('[data-busy]').hidden = true; }
   }
@@ -61,6 +64,31 @@
     if (!state.settings.ignoreDailyMeeting) return '';
     return `<div class="cu-meeting-summary" data-meeting-summary><strong>${icon('users')} Napi meeting:</strong>${day.meeting?`<span>${time(day.meeting.from,'Meeting kezdete',true,day.date)} – ${time(day.meeting.to,'Meeting vége',true,day.date)}</span><span class="cu-pill">${day.manualMeeting?'Kézi választás':'Becsült'}</span><span class="cu-sub">Munkaidőnek számít</span>`:`<span class="cu-sub">${day.noMeeting?'Nem volt napi meeting':'Nincs megfelelő meetingpár'}</span>`}</div>`;
   }
+  function tsvCell(value) { return /[\t\r\n"]/.test(value)?'"'+value.replace(/"/g,'""')+'"':value; }
+  function sectionRows(day) {
+    return `<details class="cu-section-details" data-section-details="${day.key}" ${sectionDetails.has(day.key)?'open':''}><summary>Munkaszakaszok (${day.sections.length})</summary><p class="cu-note">A teljes sor másolása: dátum, feloldás, zárolás, időtartam, óraszám, megjegyzés (Excel A–F).</p><div class="cu-table-wrap"><table class="cu-sections-table"><thead><tr><th></th><th>Dátum</th><th>Feloldás</th><th>Zárolás</th><th>Hossz</th><th>Megjegyzés</th></tr></thead><tbody>${day.sections.map(s=>`<tr data-section-row="${esc(s.id)}"><td><button class="cu-quiet" data-section-copy="${esc(s.id)}" ${s.open?'disabled':''} aria-label="Teljes Excel-sor másolása" title="Teljes Excel-sor másolása">${icon('copy')}</button></td><td><span class="cu-exact">${field(s.date,'Dátum')}${copyButton(s.date,'Dátum')}</span></td><td>${time(s.from,'Feloldás',true,day.date)}</td><td>${s.open?'<span class="cu-sub">folyamatban</span>':time(s.to,'Zárolás',true,day.date)}</td><td><span class="cu-exact">${field(s.duration,'Időtartam')}${copyButton(s.durationExact||s.duration,'Időtartam')}</span>${s.open?'<span class="cu-sub">eddig</span>':''}</td><td class="cu-comment-cell"><div class="cu-comment-editor"><textarea rows="2" maxlength="32767" data-section-comment="${esc(s.id)}" aria-label="Munkaszakasz megjegyzése" placeholder="Megjegyzés a Details oszlophoz">${esc(commentDrafts.get(s.id)??s.comment??'')}</textarea><button class="cu-quiet" data-comment-copy="${esc(s.id)}" aria-label="Megjegyzés másolása">${icon('copy')}</button></div><span class="cu-sub" data-comment-status="${esc(s.id)}">${commentDrafts.has(s.id)?'Mentés...':'Mentve'}</span></td></tr>`).join('')}</tbody></table></div></details>`;
+  }
+  function findSection(id) { return state.days.flatMap(day=>day.sections).find(s=>s.id===id); }
+  function commentStatus(id,text) {
+    root.querySelectorAll('[data-comment-status]').forEach(node=>{if(node.dataset.commentStatus===id)node.textContent=window.i18n.text(text,state.settings.language);});
+  }
+  async function flushSectionComments() {
+    while(commentDrafts.size||savingComments){
+      if(savingComments){await savingComments;continue;}
+      savingComments=(async()=>{
+        await rpc('commentsPending',{pending:true});
+        while(commentDrafts.size){
+          const [sectionId,comment]=commentDrafts.entries().next().value;
+          try { await rpc('sectionComment',{sectionId,comment}); }
+          catch(ex){commentStatus(sectionId,'A mentés nem sikerült');await rpc('commentsFailed').catch(()=>{});throw ex;}
+          if(commentDrafts.get(sectionId)===comment){commentDrafts.delete(sectionId);commentStatus(sectionId,'Mentve');}
+        }
+        await rpc('commentsPending',{pending:false});
+      })();
+      try { await savingComments; }
+      finally { savingComments=null; }
+    }
+  }
   function dayDetails(day) {
     const meetingEnabled=state.settings.ignoreDailyMeeting;
     return `<section class="cu-detail"><div class="cu-row cu-between cu-detail-top"><span>Lock / unlock párok</span><button class="cu-quiet" data-copy="${esc(day.eventCopy)}">${icon('copy')}Napló másolása</button></div>
@@ -68,6 +96,7 @@
       <div class="cu-table-wrap"><table><thead><tr><th>${state.settings.lockTimeSource==='activity'?'Szakasz vége':'Zárolás'}</th><th>Feloldás</th><th>Szünet</th><th>Utolsó aktivitás zárolás előtt</th><th>Ebéd</th>${meetingEnabled?'<th>Napi meeting</th>':''}</tr></thead><tbody>${day.pairs.map(p=>`<tr class="${day.lunch?.id===p.id?'cu-chosen':day.meeting?.id===p.id?'cu-meeting-chosen':''}"><td>${time(p.from,p.fromActivity?'Utolsó aktivitás':'Zárolás',false,day.date)}${state.settings.lockTimeSource==='activity'?`<span class="cu-sub">${p.fromActivity?'Aktivitás alapján':'Zárolás alapján'}</span>`:''}</td><td>${time(p.to,'Feloldás',false,day.date)}</td><td>${p.minutes} perc</td><td>${activityDetail(p.activity,day.date)}</td><td><label class="cu-check"><input type="radio" name="lunch-${day.key}" data-lunch="${day.key}" value="${esc(p.id)}" ${day.lunch?.id===p.id?'checked':''}>${day.lunch?.id===p.id?'Ebéd':'Kijelölés'}</label></td>${meetingEnabled?`<td><label class="cu-check"><input type="radio" name="meeting-${day.key}" data-meeting="${day.key}" value="${esc(p.id)}" ${day.meeting?.id===p.id?'checked':''}>${day.meeting?.id===p.id?'Meeting':'Kijelölés'}</label></td>`:''}</tr>`).join('')}</tbody></table></div>
       <div class="cu-row cu-between cu-lunch-actions"><label class="cu-check"><input type="radio" name="lunch-${day.key}" data-lunch="${day.key}" value="none" ${day.none?'checked':''}>Nem volt ebéd</label><div class="cu-row">${day.manual?`<button class="cu-quiet" data-auto="${day.key}">${icon('sparkles')}Becslés használata</button>`:''}${day.undo?`<button data-undo="${day.key}">${icon('undo-2')}Visszavonás</button>`:''}</div></div>
       ${meetingEnabled?`<div class="cu-row cu-between cu-lunch-actions"><label class="cu-check"><input type="radio" name="meeting-${day.key}" data-meeting="${day.key}" value="none" ${day.noMeeting?'checked':''}>Nem volt napi meeting</label>${day.manualMeeting?`<button class="cu-quiet" data-meeting-auto="${day.key}">${icon('sparkles')}Meeting becslése</button>`:''}</div>`:''}
+      ${sectionRows(day)}
       <details style="margin-top:12px"><summary>Összes naplóesemény (${day.events.length})</summary><div class="cu-table-wrap"><table><thead><tr><th>Dátum</th><th>Időpont</th><th>Esemény</th><th>Azonosító</th><th>Utolsó aktivitás zárolás előtt</th></tr></thead><tbody>${day.events.map(e=>`<tr><td>${field(e.time.date,'Esemény dátuma')}</td><td>${time(e.time,'Esemény időpontja')}</td><td>${esc(e.label)}</td><td>${e.eventId}</td><td>${(e.isLock??e.eventId===4800)?activityDetail(e.activity,day.date):'—'}</td></tr>`).join('')}</tbody></table></div></details></section>`;
   }
   function accessWarning() {
@@ -83,10 +112,11 @@
     root.style.setProperty('--cu-scale', state.settings.fontScale);
     document.documentElement.style.colorScheme = state.settings.theme === 'auto' ? 'light dark' : state.settings.theme;
     root.innerHTML = `<div data-background><div class="cu-titlebar"><img class="cu-app-icon" src="assets/app-icon.png" alt=""><strong>CompUsage</strong><span class="cu-muted">Saját Windows-fiók · ${esc(state.user)}</span></div><main class="cu-shell"><header class="cu-row cu-between"><div><h1>Munkaidőnapló</h1><span class="cu-sub cu-live">${icon(state.logging?'shield-check':'shield-alert')}Naplózás ${state.logging===null?'állapota ismeretlen':state.logging?'bekapcsolva':'kikapcsolva'}</span></div><button data-settings>${icon('settings-2')}Beállítások</button></header>${loggingWarning()}${accessWarning()}${activityStatus()}<div class="cu-row cu-between cu-toolbar"><div class="cu-row"><div class="cu-segmented" aria-label="Előzmények">${[7,30,60].map(n=>`<button data-history="${n}" aria-pressed="${state.settings.historyDays===n}">${n} nap</button>`).join('')}</div><button class="cu-quiet" data-refresh>${icon('refresh-cw')}Frissítés</button></div><button data-copy-all>${icon('copy')}Összesítő másolása</button></div><div class="cu-error" role="alert" data-error ${state.error?'':'hidden'}>${esc(state.error)}</div><section class="cu-file"><div class="cu-row cu-between"><div><div class="cu-row cu-file-name">${icon('file-spreadsheet')}${esc(file||'Nincs beállítva munkaidőfájl')}</div>${w.available?`<p class="cu-sub">Details utolsó dátuma: ${w.lastDate?field(w.lastDate,'Utolsó dátum'):'még üres'}</p><div class="cu-pending">${w.days} új nap · ${w.rows} új sor${w.partials?' · '+w.partials+' megkezdett sor':''}</div>`:`<p class="cu-sub">${esc(w.error||'A beállításokban válassz .xlsx fájlt.')}</p>`}</div><div class="cu-row"><button data-open-file ${w.available?'':'disabled'}>${icon('external-link')}Megnyitás</button><button class="cu-primary" data-append ${w.available?'':'disabled'}>${icon('list-plus')}Details folytatása</button></div></div></section><div data-import>${plan?importMarkup():''}</div><div class="cu-row cu-between cu-section"><span>${state.days.length} munkanap</span><span>${state.refreshed?'Frissítve: '+esc(state.refreshed):'Még nem történt naplóolvasás'}</span></div>${state.days.length?state.days.map(dayCard).join(''):`<div class="cu-empty">Nincs lock/unlock esemény a kiválasztott időszakban.<br>A Frissítés beolvassa az elérhető Windows-eseményeket.</div>`}<footer class="cu-footer cu-row cu-between"><span>Legfeljebb 60 nap · ${state.oldest?'a Windows-napló legrégebbi bejegyzése: '+esc(state.oldest):'az elérhető napló alapján'}</span><span>Megjelenítés az Excel formátuma szerint · másoláskor pontos időpontok</span></footer></main></div><div data-modal></div><div data-toast role="status" hidden></div><div class="cu-busy" data-busy ${busy?'':'hidden'}></div>`;
+    root.querySelectorAll('[data-section-comment]').forEach(t=>{t.value=commentDrafts.get(t.dataset.sectionComment)??findSection(t.dataset.sectionComment)?.comment??'';});
     icons(); window.scrollTo(0,y); if(draft)renderSettings();
   }
   function importMarkup() {
-    return `<section class="cu-import"><div class="cu-row cu-between"><h2>Details folytatása</h2><button class="cu-quiet" data-close-plan aria-label="Előnézet bezárása">${icon('x')}</button></div><p class="cu-note">${plan.rows.length} új sor · a lezárt, teljes napokból. A Details leírás üres marad.</p><div class="cu-table-wrap"><table><thead><tr><th>Date</th><th>From</th><th>To</th><th>Duration</th></tr></thead><tbody>${plan.rows.map(s=>`<tr><td>${field(s.date,'Dátum')}</td><td>${time(s.from,'Kezdés')}</td><td>${time(s.to,'Befejezés')}</td><td>${field(s.duration,'Időtartam')}</td></tr>`).join('')}</tbody></table></div>${plan.partials.map(p=>`<div class="cu-resume"><label class="cu-check"><input type="checkbox" data-partial="${p.row}">Megkezdett sor befejezése (${p.row}. sor)</label><p>${field(p.section.date,'Dátum')} · ${time(p.section.from,'Kezdés')} → ${time(p.section.to,'Befejezés')}</p><span class="cu-sub">Az első megfelelő munkaszakasz végéig. Azonos dátumú további sorokhoz használd a munkaszakaszok másolását.</span></div>`).join('')}<p class="cu-note">Pontos másodpercek · mentés előtt biztonsági másolat. Az Excelben előbb zárd be ezt a fájlt.</p><div class="cu-row cu-between"><button data-close-plan>Mégse</button><button class="cu-primary" data-commit ${plan.rows.length?'':'disabled'}>${icon('save')}Mentés a Details lapra</button></div></section>`;
+    return `<section class="cu-import"><div class="cu-row cu-between"><h2>Details folytatása</h2><button class="cu-quiet" data-close-plan aria-label="Előnézet bezárása">${icon('x')}</button></div><p class="cu-note">${plan.rows.length} új sor · a lezárt, teljes napokból. A megjegyzések a Details oszlopba kerülnek.</p><div class="cu-table-wrap"><table><thead><tr><th>Date</th><th>From</th><th>To</th><th>Duration</th><th>Details</th></tr></thead><tbody>${plan.rows.map(s=>`<tr><td>${field(s.date,'Dátum')}</td><td>${time(s.from,'Kezdés')}</td><td>${time(s.to,'Befejezés')}</td><td>${field(s.duration,'Időtartam')}</td><td class="cu-comment-preview" data-user-text>${esc(s.comment||'')}</td></tr>`).join('')}</tbody></table></div>${plan.partials.map(p=>`<div class="cu-resume"><label class="cu-check"><input type="checkbox" data-partial="${p.row}">Megkezdett sor befejezése (${p.row}. sor)</label><p>${field(p.section.date,'Dátum')} · ${time(p.section.from,'Kezdés')} → ${time(p.section.to,'Befejezés')}</p><p class="cu-comment-preview" data-user-text>${esc(p.section.comment||'')}</p>${p.keepsExistingComment?'<p class="cu-note">A meglévő Excel-megjegyzés megmarad.</p>':''}<span class="cu-sub">Az első megfelelő munkaszakasz végéig. Azonos dátumú további sorokhoz használd a munkaszakaszok másolását.</span></div>`).join('')}<p class="cu-note">Pontos másodpercek · mentés előtt biztonsági másolat. Az Excelben előbb zárd be ezt a fájlt.</p><div class="cu-row cu-between"><button data-close-plan>Mégse</button><button class="cu-primary" data-commit ${plan.rows.length?'':'disabled'}>${icon('save')}Mentés a Details lapra</button></div></section>`;
   }
   function settingField(key,label,type='text',extra='') { return `<label class="cu-field"><span>${label}</span><input data-setting="${key}" type="${type}" value="${esc(draft.settings[key])}" ${extra}></label>`; }
   function renderSettings() {
@@ -106,6 +136,8 @@
     if(e.target.matches('.cu-value')){if(e.target.selectionStart===e.target.selectionEnd)e.target.select();return;}
     const button=e.target.closest('button');if(!button||button.disabled||busy)return;
     const d=button.dataset;
+    if('sectionCopy'in d){perform(()=>{const s=findSection(d.sectionCopy);if(!s||s.open)return;return copy(s.excelCells?s.excelCells.map(tsvCell).join('\t'):s.copy);});return;}
+    if('commentCopy'in d){perform(()=>copy(findSection(d.commentCopy)?.comment||''));return;}
     if('copy'in d){perform(()=>copy(d.copy));return;}
     if('expand'in d){expanded.has(d.expand)?expanded.delete(d.expand):expanded.add(d.expand);render();root.querySelector(`[data-expand="${d.expand}"]`).focus({preventScroll:true});saveView();return;}
     if('settings'in d){draft={settings:{...state.settings},logging:state.logging,activityEnabled:state.activity?.enabled||false};draft.settings.dayStart=draft.settings.dayStart.slice(0,5);draft.settings.expectedLunch=draft.settings.expectedLunch.slice(0,5);draft.settings.meetingStartFrom=(draft.settings.meetingStartFrom||'09:25').slice(0,5);draft.settings.meetingStartUntil=(draft.settings.meetingStartUntil||'09:40').slice(0,5);draft.settings.maximumMeetingMinutes??=20;tab='time';renderSettings();root.querySelector(d.settings==='permissions'?'[data-grant-read-access]':d.settings==='logging'?'[data-logging]':'[data-tab="time"]').focus();return;}
@@ -128,7 +160,15 @@
       if('commit'in d){const partials=[...root.querySelectorAll('[data-partial]:checked')].map(x=>Number(x.dataset.partial));const result=await rpc('commit',{token:plan.token,partials});state=result.state;plan=null;render();notify('Mentés kész. Biztonsági másolat: '+result.backup);}
     });
   });
-  root.addEventListener('input',e=>{const t=e.target;if(!draft)return;if(t.matches('[data-setting]')){const key=t.dataset.setting;draft.settings[key]=t.type==='checkbox'?t.checked:['fontScale','minimumLunchMinutes','splitBreakMinutes','maximumMeetingMinutes'].includes(key)?Number(t.value):t.value;if(key==='fontScale')root.querySelector('[data-font-preview]').style.fontSize=`${Number(t.value)/state.settings.fontScale}em`;if(key==='theme'){document.documentElement.style.colorScheme=t.value==='auto'?'light dark':t.value;rpc('previewTheme',{theme:t.value}).catch(ex=>error(ex.message));}}if(t.matches('[data-logging]'))draft.logging=t.checked;if(t.matches('[data-activity-enabled]'))draft.activityEnabled=t.checked;});
+  root.addEventListener('toggle',e=>{const t=e.target;if(t.matches('[data-section-details]')){t.open?sectionDetails.add(t.dataset.sectionDetails):sectionDetails.delete(t.dataset.sectionDetails);}},true);
+  root.addEventListener('input',e=>{const t=e.target;
+    if(t.matches('[data-section-comment]')){
+      const s=findSection(t.dataset.sectionComment);if(!s)return;
+      s.comment=t.value;if(s.excelCells)s.excelCells[5]=t.value;commentDrafts.set(s.id,t.value);
+      plan=null;root.querySelector('[data-import]').innerHTML='';commentStatus(s.id,'Mentés...');
+      flushSectionComments().catch(ex=>error(ex.message));return;
+    }
+    if(!draft)return;if(t.matches('[data-setting]')){const key=t.dataset.setting;draft.settings[key]=t.type==='checkbox'?t.checked:['fontScale','minimumLunchMinutes','splitBreakMinutes','maximumMeetingMinutes'].includes(key)?Number(t.value):t.value;if(key==='fontScale')root.querySelector('[data-font-preview]').style.fontSize=`${Number(t.value)/state.settings.fontScale}em`;if(key==='theme'){document.documentElement.style.colorScheme=t.value==='auto'?'light dark':t.value;rpc('previewTheme',{theme:t.value}).catch(ex=>error(ex.message));}}if(t.matches('[data-logging]'))draft.logging=t.checked;if(t.matches('[data-activity-enabled]'))draft.activityEnabled=t.checked;});
   root.addEventListener('change',e=>{const t=e.target;if(t.matches('[data-lunch]')){perform(()=>update('lunch',{date:t.dataset.lunch,value:t.value}));}if(t.matches('[data-meeting]')){perform(()=>update('meeting',{date:t.dataset.meeting,value:t.value}));}if(t.matches('[data-partial]'))root.querySelector('[data-commit]').disabled=!(plan.rows.length||root.querySelector('[data-partial]:checked'));});
   root.addEventListener('keydown',e=>{
     const t=e.target;
@@ -140,7 +180,7 @@
     }
     if(!draft)return;
     if(e.key==='Escape'&&!busy){e.preventDefault();closeSettings();return;}
-    if(t.matches('[data-tab]')&&['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const keys=['time','excel','display'],i=keys.indexOf(tab);tab=e.key==='Home'?keys[0]:e.key==='End'?keys[2]:keys[(i+(e.key==='ArrowRight'?1:2))%3];renderSettings();root.querySelector(`[data-tab="${tab}"]`).focus();}
+    if(t.matches('[data-tab]')&&['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();const keys=['time','meeting','excel','display'],i=keys.indexOf(tab);tab=e.key==='Home'?keys[0]:e.key==='End'?keys.at(-1):keys[(i+(e.key==='ArrowRight'?1:keys.length-1))%keys.length];renderSettings();root.querySelector(`[data-tab="${tab}"]`).focus();}
     if(e.key==='Tab'){const items=[...root.querySelector('.cu-dialog').querySelectorAll('button,input,select')].filter(x=>!x.disabled&&!x.closest('[hidden]'));if(e.shiftKey&&document.activeElement===items[0]){e.preventDefault();items.at(-1).focus();}else if(!e.shiftKey&&document.activeElement===items.at(-1)){e.preventDefault();items[0].focus();}}
   });
   window.addEventListener('scroll',()=>{clearTimeout(scrollTimer);scrollTimer=setTimeout(saveView,350);},{passive:true});

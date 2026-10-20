@@ -9,6 +9,20 @@ public sealed record BreakPair(LockEvent Lock, LockEvent Unlock)
 }
 public sealed record WorkInterval(DateOnly Date, DateTimeOffset From, DateTimeOffset To, bool Open = false)
 {
+    private string comment = "";
+    public string Id => string.Create(CultureInfo.InvariantCulture,$"{Date:yyyy-MM-dd}|{From.UtcTicks}");
+    public string Comment
+    {
+        get => comment;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (value.Length > 32767) throw new ArgumentException("A megjegyzés legfeljebb 32767 karakter lehet.");
+            try { System.Xml.XmlConvert.VerifyXmlChars(value); }
+            catch (System.Xml.XmlException ex) { throw new ArgumentException("A megjegyzés nem megengedett karaktert tartalmaz.", ex); }
+            comment = value;
+        }
+    }
     public TimeSpan Duration => To - From;
 }
 public sealed record LoggingGap(DateTimeOffset From, DateTimeOffset? To);
@@ -28,19 +42,22 @@ public static class WorkReports
     public static IReadOnlyList<WorkReport> Build(IEnumerable<LockEvent> events, AppSettings settings,
         IReadOnlyDictionary<string, string> lunches, DateTimeOffset now, TimeZoneInfo zone,
         IEnumerable<LoggingGap>? gaps = null, IEnumerable<ActivityLock>? activity = null,
-        IReadOnlyDictionary<string, string>? meetings = null)
+        IReadOnlyDictionary<string, string>? meetings = null,
+        IReadOnlyDictionary<string, string>? comments = null)
     {
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
         var firstDate = today.AddDays(1 - settings.HistoryDays);
         var meetingChoices = meetings ?? new Dictionary<string, string>();
+        var notes = comments ?? new Dictionary<string, string>();
         var raw = SessionEvents.ResolveSessions(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
             .DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId));
         var originalDays = raw.GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
         return ActivityHistory.Apply(SessionEvents.WorkTransitions(raw), activity ?? [], settings, zone)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
-            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, meetingChoices, now, zone, gaps ?? [])).ToArray();
+            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, meetingChoices, now, zone, gaps ?? []))
+            .Select(day => day with { Sections = day.Sections.Select(s => s with { Comment = notes.GetValueOrDefault(s.Id, "") }).ToArray() }).ToArray();
     }
 
     private static WorkReport BuildDay(DateOnly date, LockEvent[] list, LockEvent[] raw, AppSettings settings,

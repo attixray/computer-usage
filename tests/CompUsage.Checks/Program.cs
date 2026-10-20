@@ -119,6 +119,28 @@ Check("Activity tracking defaults off and validates its optional time source", (
 List<LockEvent> MeetingDay() => [Event(16,"08:00",false),Event(16,"09:29:43",true),Event(16,"09:41:18",false),
     Event(16,"11:32:05",true),Event(16,"11:51:34",false),Event(16,"17:00",true)];
 var meetingSettings = settings with {IgnoreDailyMeeting=true};
+Check("Section comment identity survives an open interval closing and does not drift to another start", () =>
+{
+    var entries=Day(19).SkipLast(1).ToArray();var before=Report(entries);var section=before.Sections[^1];
+    var notes=new Dictionary<string,string>{{section.Id,"Design and review — árvíztűrő"}};
+    var later=WorkReports.Build(entries,settings,lunches,now.AddMinutes(5),zone,comments:notes).Single();
+    Equal(section.Id,later.Sections[^1].Id);Equal(notes[section.Id],later.Sections[^1].Comment);
+    var closed=WorkReports.Build(entries.Append(Event(19,"14:05",true)),settings,lunches,now.AddMinutes(10),zone,comments:notes).Single();
+    Equal(section.Id,closed.Sections[^1].Id);Equal(notes[section.Id],closed.Sections[^1].Comment);
+    Equal("",closed.Sections[0].Comment);
+    var changed=WorkReports.Build(entries,settings with {ExpectedLunch=new(9,0)},new Dictionary<string,string>{{"2026-10-19","none"}},now,zone,comments:notes).Single();
+    True(changed.Sections.All(s=>s.Id!=section.Id||s.Comment==notes[section.Id]));
+});
+Check("Excel row copy has six columns and preserves regional hours plus quoted multiline comments", () =>
+{
+    var row=new WorkInterval(new(2026,10,16),At(16,"08:00:01"),At(16,"09:30:03")){Comment="Árvíz\t\"review\"\nnext"};
+    var excel=new ExcelDisplay(new("yyyy.mm.dd","h:mm","h:mm"),huCulture,zone);
+    var cells=excel.ExcelCells(row);Equal(6,cells.Length);Equal("1:30:02",cells[3]);True(cells[4].Contains(','));
+    Equal("2026.10.16\t08:00:01\t09:30:03",excel.CopyRow(row));
+    True(excel.CopyExcelRow(row).EndsWith("\"Árvíz\t\"\"review\"\"\nnext\"",StringComparison.Ordinal));
+    Throws<ArgumentException>(()=>_ = row with {Comment=new string('x',32768)});
+    Throws<ArgumentException>(()=>_ = row with {Comment="bad\0text"});
+});
 WorkReport MeetingReport(IEnumerable<LockEvent> entries, AppSettings? config=null, string? choice=null) =>
     WorkReports.Build(entries,config??meetingSettings,lunches,now,zone,
         meetings:choice is null?null:new Dictionary<string,string>{{"2026-10-16",choice}}).Single();
@@ -290,6 +312,36 @@ try
         Equal(2,journal.ReadAll().Count); Equal(1,journal.Load("1").Locks.Count);
         journal.Configure(false); True(!journal.Configuration().Enabled); Equal(1,journal.Load("1").Locks.Count);
         Throws<ArgumentException>(()=>journal.Load("../state"));
+    });
+    Check("Section comments reach Details as literal Unicode text, including formulas and Excel escape sequences",()=>
+    {
+        var path=Fixture("comments-write");var day=Report(Day(16));
+        var notes=new Dictionary<string,string>{{day.Sections[0].Id," =SUM(1,2)\nÁrvíztűrő \"review\"\t_x0041_ "},{day.Sections[1].Id,"=2+2"}};
+        var days=WorkReports.Build(Day(16),settings,lunches,now,zone,comments:notes);
+        var plan=service.Preview(path,days);Equal(notes[day.Sections[0].Id],plan.Rows[0].Comment);service.Commit(plan,[]);
+        using var book=new XLWorkbook(path);var sheet=book.Worksheet("Details");
+        // ClosedXML exposes inline Xstring escapes and normalizes line endings; Excel decodes them on display.
+        Equal(notes[day.Sections[0].Id],System.Xml.XmlConvert.DecodeName(sheet.Cell(3,6).GetString()).ReplaceLineEndings("\n"));Equal("=2+2",sheet.Cell(4,6).GetString());
+        True(!sheet.Cell(4,6).HasFormula);Equal("Existing description",sheet.Cell(2,6).GetString());
+    });
+    Check("Completing a partial fills a blank Details cell and preserves an existing description or formula",()=>
+    {
+        foreach(var existing in new[]{"","Keep this description","=2+2"})
+        {
+            var path=Fixture("partial-comment-"+Guid.NewGuid().ToString("N"));
+            using(var book=new XLWorkbook(path))
+            {
+                var cell=book.Worksheet("Details").Cell(2,6);cell.Clear();
+                if(existing.StartsWith('='))cell.FormulaA1=existing[1..];else if(existing.Length>0)cell.Value=existing;
+                book.Save();
+            }
+            var day=Report(Day(14,"08:11:24","17:03:55"));
+            var notes=new Dictionary<string,string>{{day.Sections[0].Id,"New comment"}};
+            var days=WorkReports.Build(Day(14,"08:11:24","17:03:55"),settings,lunches,now,zone,comments:notes);
+            var plan=service.Preview(path,days);Equal(existing.Length>0,plan.Partials[0].KeepsExistingComment);
+            service.Commit(plan,[2]);using var result=new XLWorkbook(path);var actual=result.Worksheet("Details").Cell(2,6);
+            if(existing.StartsWith('='))Equal(existing[1..],actual.FormulaA1);else Equal(existing.Length>0?existing:"New comment",actual.GetString());
+        }
     });
     Check("Excel append keeps the daily meeting inside a continuous row and still excludes lunch",()=>
     {

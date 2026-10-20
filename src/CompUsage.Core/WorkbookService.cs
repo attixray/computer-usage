@@ -5,7 +5,7 @@ using System.Xml.Linq;
 
 namespace CompUsage.Core;
 
-public sealed record PartialRow(int Row, WorkInterval Interval);
+public sealed record PartialRow(int Row, WorkInterval Interval, bool KeepsExistingComment = false);
 public sealed record WorkbookPlan(string Path, string Fingerprint, DateOnly? LastDate,
     IReadOnlyList<WorkInterval> Rows, IReadOnlyList<PartialRow> Partials, int LastRow, bool Date1904, WorkbookFormats Formats);
 
@@ -49,7 +49,10 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                 var candidate = candidates[0];
                 var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(candidate.From, zone).DateTime);
                 var existingFrom = WorkDayClock.At(localDate, TimeOnly.FromTimeSpan(from.Value), zone);
-                if (existingFrom < candidate.To) partials.Add(new(RowNumber(row), candidate with { From = existingFrom }));
+                var existingComment = Text(Cell(row,"F"), strings);
+                var keepComment = !string.IsNullOrEmpty(existingComment) || Cell(row,"F")?.Element(Ns + "f") is not null;
+                if (existingFrom < candidate.To) partials.Add(new(RowNumber(row), candidate with
+                { From = existingFrom, Comment = keepComment ? existingComment : candidate.Comment }, keepComment));
             }
         }
         return new(Path.GetFullPath(path), Convert.ToHexString(SHA256.HashData(bytes)), lastDate, rows, partials, lastRow, date1904, formats);
@@ -78,6 +81,7 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                 var (sheet, sheetPath, _) = ReadSheet(zip);
                 var data = sheet.Root!.Element(Ns + "sheetData")!;
                 var styles = ReadXml(zip, "xl/styles.xml");
+                var strings = ReadStrings(zip);
                 var formats = new Dictionary<(int, string), int>();
                 var template = SheetRows(sheet).LastOrDefault(r => RowNumber(r) <= plan.LastRow && RowNumber(r) > 1);
                 var next = plan.LastRow;
@@ -96,6 +100,7 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                     Set(row, "C", index, LocalFraction(interval.To), template);
                     Set(row, "D", index, interval.Duration.TotalDays, template);
                     Set(row, "E", index, interval.Duration.TotalHours, template);
+                    if (interval.Comment.Length > 0) SetText(row, "F", index, interval.Comment, template);
                     FormatRow(row, sheet, styles, formats, false, plan.Formats);
                 }
                 foreach (var partial in plan.Partials.Where(p => selectedPartials.Contains(p.Row)))
@@ -105,6 +110,9 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                     // Preserve existing duration formulas; only fill blank duration cells.
                     if (Cell(row, "D")?.Element(Ns + "f") is null) Set(row, "D", partial.Row, partial.Interval.Duration.TotalDays, template);
                     if (Cell(row, "E")?.Element(Ns + "f") is null) Set(row, "E", partial.Row, partial.Interval.Duration.TotalHours, template);
+                    if (partial.Interval.Comment.Length > 0 && Cell(row,"F")?.Element(Ns + "f") is null
+                        && string.IsNullOrEmpty(Text(Cell(row,"F"), strings)))
+                        SetText(row,"F",partial.Row,partial.Interval.Comment,template);
                     FormatRow(row, sheet, styles, formats, true, plan.Formats);
                 }
                 var dimension = sheet.Root.Element(Ns + "dimension");
@@ -183,8 +191,8 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         var value = cell.Element(Ns + "v")?.Value ?? "";
         return (string?)cell.Attribute("t") switch
         {
-            "s" => int.TryParse(value, out var index) && index >= 0 && index < strings.Length ? strings[index] : "",
-            "inlineStr" => string.Concat(cell.Descendants(Ns + "t").Select(t => t.Value)),
+            "s" => int.TryParse(value, out var index) && index >= 0 && index < strings.Length ? System.Xml.XmlConvert.DecodeName(strings[index]) : "",
+            "inlineStr" => System.Xml.XmlConvert.DecodeName(string.Concat(cell.Descendants(Ns + "t").Select(t => t.Value))),
             _ => value
         };
     }
@@ -225,6 +233,17 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         cell.SetAttributeValue("t", null);
         cell.Elements(Ns + "f").Remove(); cell.Elements(Ns + "is").Remove(); cell.Elements(Ns + "v").Remove();
         cell.Add(new XElement(Ns + "v", value.ToString("R", Invariant)));
+    }
+
+    private static void SetText(XElement row, string column, int index, string value, XElement? template)
+    {
+        // Inline text preserves Unicode/whitespace and never interprets a comment as an Excel formula.
+        Set(row,column,index,0,template);
+        var cell=Cell(row,column)!;
+        cell.Elements(Ns+"v").Remove();cell.SetAttributeValue("t","inlineStr");
+        var escaped=System.Text.RegularExpressions.Regex.Replace(value,@"_x[0-9a-fA-F]{4}_",m=>"_x005F_"+m.Value[1..]);
+        escaped=escaped.Replace("\r","_x000D_",StringComparison.Ordinal);
+        cell.Add(new XElement(Ns+"is",new XElement(Ns+"t",new XAttribute(XNamespace.Xml+"space","preserve"),escaped)));
     }
 
     private static void FormatRow(XElement row, XDocument sheet, XDocument styles, Dictionary<(int, string), int> cache, bool partial, WorkbookFormats fallback)

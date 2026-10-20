@@ -9,6 +9,8 @@ A local Windows work-log application based on the current user's lock and unlock
 - Automatic lunch suggestion, manual pair selection, no-lunch selection, and undo.
 - Optional daily meeting exception (off by default): a start between 09:25 and 09:40 and a maximum duration of 20 minutes. The selected meeting counts as work and keeps the work section continuous.
 - Large, selectable dates/times; exact-second copy icons; individual section and whole-day copying as headerless Date/From/To TSV.
+- An expandable Work sections table before All log events shows date, unlock, lock, duration and an editable comment, with per-field copying and a leading full Excel-row copy button.
+- Section comments save locally as you type and are included in Details preview and XLSX writing. A section's date/start identity keeps its comment stable as an ongoing section closes.
 - Ctrl+C / Ctrl+Insert and Ctrl+V / Shift+Insert. Display follows the workbook's date/time formats and Windows regional separators. Hidden seconds are not rounded; copy icons and Excel writing preserve original seconds.
 - Hungarian and English UI; system, dark, and light themes.
 - Native caption colors follow the selected theme, preview changes live and restore on Cancel. Windows 11 caption colors match the interface; older Windows versions keep their supported system rendering. High contrast uses system caption colors.
@@ -52,7 +54,11 @@ Current days and visibly incomplete or ambiguous event sequences are excluded fr
 
 Preview proposes only complete days later than the last date already present. A matching unfinished row on that last date is offered separately; its existing start is preserved. Exact starts and starts entered using the displayed minute are recognized, including older rounded entries. Completion ends at the matching work section's end, not across an excluded break. Further sections on an already-present date can be copied manually.
 
-New rows contain numeric dates/times and durations; their Details text stays blank. Existing cell, row and column number formats are retained or inherited. The UI reads the Details date, From and To formats instead of forcing its own format. For example, `h:mm` displays `8:01:37` as `8:01`, while `hh:mm:ss` displays `08:01:37`. Regional separators and literal quoted separators are handled separately. Without an available workbook, the fallback is regional year/month/day and 24-hour time without a leading zero.
+New rows contain numeric dates/times and durations. Their Details text comes from the section comment, or stays blank if no comment is entered. Comments are written as literal inline text, preserving Unicode, whitespace and Excel escape sequences; text beginning with `=` is not evaluated as a formula. When completing a selected unfinished row, an existing Details description or formula is preserved and shown in preview; only a blank Details cell is filled. Already exported rows are not rewritten.
+
+The original quick-copy buttons keep the three-column Date/From/To TSV format. The new table's leading copy button supplies all six Excel columns: Date, From, To, Duration, Duration (H), Details. The duration copy includes seconds, hours use regional decimal formatting, and quotes/tabs/newlines are escaped for TSV. Open sections permit comment editing and individual field copying but have no final lock or full-row copy. Copying text for a manual paste follows Excel's normal paste interpretation.
+
+Existing cell, row and column number formats are retained or inherited. The UI reads the Details date, From and To formats instead of forcing its own format. For example, `h:mm` displays `8:01:37` as `8:01`, while `hh:mm:ss` displays `08:01:37`. Regional separators and literal quoted separators are handled separately. Without an available workbook, the fallback is regional year/month/day and 24-hour time without a leading zero.
 
 Other worksheets and unrelated workbook parts are preserved. Existing unfinished-row duration formulas are retained. The workbook is marked for recalculation by Excel. Both 1900 and 1904 date systems are supported. Plain worksheet ranges are the supported target; expanding structured Excel tables is not implemented.
 
@@ -71,6 +77,8 @@ This is an input-time estimate, not a guaranteed manual/automatic-lock classifie
 Preferences, manual lunch choices, cached events, and window state are stored in `%LocalAppData%\CompUsage\state.json`. The WebView2 profile lives in the same application data folder. Uninstall keeps this data and all workbooks. No event log, workbook, or user configuration belongs in the Git repository.
 
 Manual daily meeting choices are stored alongside lunch choices in `state.json`, with the same 60-day retention. Existing settings files load with the feature disabled and the new defaults.
+
+Section comments are stored in `SectionComments` in the same file, keyed by work date and exact UTC section start, with 60-day retention. Closing a section or adjusting its end does not change that key. Changing rules can merge/remove starts: comments for absent starts stay retained but are not silently assigned to another section; restoring the original section restores its comment. Emptying the editor removes the saved note. Comments are limited to Excel's 32,767 UTF-16 characters and valid XML text. Refresh/copy/export wait for pending saves, and close waits for the comment queue. A failed save retains its draft for retry; closing after a failure offers an explicit discard choice.
 
 The optional monitor uses `%LocalAppData%\CompUsage\Activity\configuration.json`, separate session journals and small heartbeat files. The UI never writes the monitor's history, and the monitor never writes UI state. These files stay local and are retained on uninstall.
 

@@ -2,6 +2,16 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Munkaszakaszok':'Work sections','Megjegyzés':'Comment','Hossz':'Duration','eddig':'so far',
+    'Teljes Excel-sor másolása':'Copy full Excel row','Megjegyzés másolása':'Copy comment',
+    'Munkaszakasz megjegyzése':'Work-section comment','Megjegyzés a Details oszlophoz':'Comment for the Details column',
+    'Mentés...':'Saving...','Mentve':'Saved','A mentés nem sikerült':'Save failed',
+    'A teljes sor másolása: dátum, feloldás, zárolás, időtartam, óraszám, megjegyzés (Excel A–F).':'Full-row copy: date, unlock, lock, duration, hours, comment (Excel A–F).',
+    'a lezárt, teljes napokból. A megjegyzések a Details oszlopba kerülnek.':'from complete, closed days. Comments are written to the Details column.',
+    'A meglévő Excel-megjegyzés megmarad.':'The existing Excel comment is preserved.',
+    'A munkaszakasz megváltozott. Frissítsd a naplót, majd próbáld újra.':'The work section changed. Refresh the log and try again.',
+    'A megjegyzés legfeljebb 32767 karakter lehet.':'Comments can contain at most 32767 characters.',
+    'A megjegyzés nem megengedett karaktert tartalmaz.':'The comment contains an unsupported character.',
     'Napi meeting':'Daily meeting','Napi meeting:':'Daily meeting:',
     'Meeting kezdete':'Meeting start','Meeting vége':'Meeting end','Meeting':'Meeting',
     'Munkaidőnek számít':'Counts as work','Nem volt napi meeting':'No daily meeting',
@@ -109,6 +119,8 @@ window.i18n = (() => {
         [/^(\d+) új sor · a lezárt, teljes napokból\. A Details leírás üres marad\.$/,'$1 new rows from completed days. The Details description stays blank.'],
         [/^Megkezdett sor befejezése \((\d+)\. sor\)$/,'Complete unfinished row (row $1)'],
         [/^Összes naplóesemény \((\d+)\)$/,'All log events ($1)'],
+        [/^Munkaszakaszok \((\d+)\)$/,'Work sections ($1)'],
+        [/^(\d+) új sor · a lezárt, teljes napokból\. A megjegyzések a Details oszlopba kerülnek\.$/,'$1 new rows from completed days. Comments are written to the Details column.'],
         [/^Legfeljebb 60 nap · a Windows-napló legrégebbi bejegyzése: (.+)$/,'Up to 60 days · oldest Windows log record: $1'],
         [/^Legfeljebb 60 nap · az elérhető napló alapján$/,'Up to 60 days · based on available log data'],
         [/^(.+) eseményei$/,'Events for $1'],[/^(.+) másolása$/,(_,label)=>`${text(label,'en')} — copy`],
@@ -125,7 +137,7 @@ window.i18n = (() => {
     const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
     while(walker.nextNode()){
       const node=walker.currentNode;
-      if(!['SCRIPT','STYLE','TEXTAREA'].includes(node.parentElement?.tagName))node.textContent=text(node.textContent,language);
+      if(!['SCRIPT','STYLE','TEXTAREA'].includes(node.parentElement?.tagName)&&!node.parentElement?.closest('[data-user-text]'))node.textContent=text(node.textContent,language);
     }
     root.querySelectorAll('[aria-label],[title],[placeholder]').forEach(node=>{
       for(const attr of ['aria-label','title','placeholder'])if(node.hasAttribute(attr))node.setAttribute(attr,text(node.getAttribute(attr),language));

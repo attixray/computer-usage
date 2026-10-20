@@ -33,6 +33,9 @@ public sealed class MainWindow : Window
     private readonly WindowTheme windowTheme;
     private bool readAccessRequired;
     private bool closing;
+    private bool commentsPending;
+    private bool closeAfterComments;
+    private bool commentsSaveFailed;
 
     public MainWindow()
     {
@@ -59,6 +62,22 @@ public sealed class MainWindow : Window
         Loaded += async (_, _) => await InitializeAsync();
         Closing += (_, e) =>
         {
+            if (commentsPending)
+            {
+                if (commentsSaveFailed)
+                {
+                    if (MessageBox.Show(state.Settings.Language == "en" ? "Close and discard unsaved comments?" : "Kilépsz a nem mentett megjegyzések eldobásával?",
+                        "CompUsage",MessageBoxButton.YesNo,MessageBoxImage.Warning,MessageBoxResult.No) != MessageBoxResult.Yes)
+                    { e.Cancel=true;closeAfterComments=false;return; }
+                    commentsPending=false;
+                }
+                else
+                {
+                    e.Cancel = true; closeAfterComments = true;
+                    view.CoreWebView2?.PostWebMessageAsJson("{\"command\":\"saveCommentsBeforeClose\"}");
+                    return;
+                }
+            }
             if (gate.CurrentCount == 0) { e.Cancel = true; return; }
             closing = true;
             try
@@ -91,9 +110,9 @@ public sealed class MainWindow : Window
             core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
             core.DownloadStarting += (_, e) => e.Cancel = true;
             core.WebMessageReceived += Receive;
-            core.ProcessFailed += (_, _) => MessageBox.Show(state.Settings.Language == "en"
+            core.ProcessFailed += (_, _) => { commentsPending = false; MessageBox.Show(state.Settings.Language == "en"
                 ? "The interface stopped. Close and restart CompUsage. Saved data is preserved."
-                : "A felület leállt. Zárd be és indítsd újra a CompUsage alkalmazást. A mentett adatok megmaradtak.", "CompUsage");
+                : "A felület leállt. Zárd be és indítsd újra a CompUsage alkalmazást. A mentett adatok megmaradtak.", "CompUsage"); };
             core.Navigate(Origin + "index.html");
         }
         catch (Exception ex)
@@ -130,7 +149,7 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports() => WorkReports.Build(state.Events, state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments);
 
     private void ReadActivity()
     {
@@ -233,11 +252,34 @@ public sealed class MainWindow : Window
                 if (text.Length > 2_000_000) throw new ArgumentException("Túl sok másolandó adat.");
                 for (var attempt = 0; ; attempt++)
                 {
-                    try { Clipboard.SetText(text); break; }
+                    try { if (text.Length == 0) Clipboard.Clear(); else Clipboard.SetText(text); break; }
                     catch (System.Runtime.InteropServices.COMException) when (attempt < 4) { await Task.Delay(80); }
                 }
                 return true;
             case "paste": return Clipboard.ContainsText() ? Clipboard.GetText() : "";
+            case "commentsPending":
+                commentsPending = data.GetProperty("pending").GetBoolean();
+                commentsSaveFailed = false;
+                if (!commentsPending && closeAfterComments)
+                    _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(Close));
+                return true;
+            case "commentsFailed": commentsSaveFailed = true; return true;
+            case "sectionComment":
+                var sectionId = data.GetProperty("sectionId").GetString();
+                var section = Reports().SelectMany(d => d.Sections).SingleOrDefault(s => s.Id == sectionId)
+                    ?? throw new ArgumentException("A munkaszakasz megváltozott. Frissítsd a naplót, majd próbáld újra.");
+                var edited = section with { Comment = data.GetProperty("comment").GetString() ?? "" };
+                var previousComment = state.SectionComments.GetValueOrDefault(section.Id);
+                if (edited.Comment.Length == 0) state.SectionComments.Remove(section.Id);
+                else state.SectionComments[section.Id] = edited.Comment;
+                try { store.Save(state); }
+                catch
+                {
+                    if (previousComment is null) state.SectionComments.Remove(section.Id);
+                    else state.SectionComments[section.Id] = previousComment;
+                    throw;
+                }
+                activePlan = null; return true;
             case "pickFile":
                 var dialog = new OpenFileDialog { Filter = "Excel (*.xlsx)|*.xlsx", CheckFileExists = true,
                     Title = state.Settings.Language == "en" ? "Select a work-log workbook" : "Munkaidőfájl kiválasztása" };
@@ -297,12 +339,15 @@ public sealed class MainWindow : Window
         exact = Presentation.Time(time.Value, TimeZoneInfo.Local, true),
         date = display.Date(DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(time.Value, TimeZoneInfo.Local).DateTime))
     };
-    private object RowSnapshot(WorkInterval row) => new { date = display.Date(row.Date), from = TimeValue(row.From),
-        to = TimeValue(row.To, true), duration = display.Duration(row.Duration), open = row.Open, copy = display.CopyRow(row) };
+    private object RowSnapshot(WorkInterval row) => new { id = row.Id, date = display.Date(row.Date), from = TimeValue(row.From),
+        to = TimeValue(row.To, true), duration = display.Duration(row.Duration), durationExact = ExcelDisplay.ExactDuration(row.Duration),
+        comment = row.Comment, excelCells = display.ExcelCells(row), excelCopy = display.CopyExcelRow(row),
+        open = row.Open, copy = display.CopyRow(row) };
     private object PlanSnapshot(WorkbookPlan plan, string token)
     {
         display = new ExcelDisplay(plan.Formats, excelCulture, TimeZoneInfo.Local);
-        return new { token, rows = plan.Rows.Select(RowSnapshot), partials = plan.Partials.Select(p => new { row = p.Row, section = RowSnapshot(p.Interval) }) };
+        return new { token, rows = plan.Rows.Select(RowSnapshot), partials = plan.Partials.Select(p => new
+        { row = p.Row, section = RowSnapshot(p.Interval), keepsExistingComment = p.KeepsExistingComment }) };
     }
 
     private object? ActivityValue(LockEvent? entry)

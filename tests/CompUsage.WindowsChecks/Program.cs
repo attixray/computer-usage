@@ -34,6 +34,10 @@ internal static class Program
                 Require(loaded.Settings.IgnoreDailyMeeting && loaded.Meetings["2026-10-16"]=="example-pair");
                 loaded.Settings=loaded.Settings with {IgnoreDailyMeeting=false};
                 Require(loaded.Meetings["2026-10-16"]=="example-pair");
+                Require(legacy.SectionComments.Count==0);
+                loaded.SectionComments["2026-10-16|123"]="Árvíztűrő\nReview";
+                var comments=System.Text.Json.JsonSerializer.Deserialize<LocalState>(System.Text.Json.JsonSerializer.Serialize(loaded))!;
+                Require(comments.SectionComments["2026-10-16|123"]=="Árvíztűrő\nReview");
             });
             Check("A second launch queues activation during startup and can activate the existing instance repeatedly", () =>
             {
