@@ -2,6 +2,19 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Napi meeting':'Daily meeting','Napi meeting:':'Daily meeting:',
+    'Meeting kezdete':'Meeting start','Meeting vége':'Meeting end','Meeting':'Meeting',
+    'Munkaidőnek számít':'Counts as work','Nem volt napi meeting':'No daily meeting',
+    'Nincs megfelelő meetingpár':'No matching meeting pair','Meeting becslése':'Use meeting estimate',
+    'Nincs ilyen szünetpár.':'No such lock/unlock pair.',
+    'Napi meeting figyelmen kívül hagyása':'Ignore daily meeting',
+    'Meeting kezdése ettől':'Meeting starts from','Meeting kezdése eddig':'Meeting starts until',
+    'Meeting maximum (perc)':'Maximum meeting length (minutes)',
+    'Alapból kikapcsolva. A kijelölt napi meeting munkaidőnek számít, és nem bontja szét a munkaszakaszt.':'Disabled by default. The selected daily meeting counts as work and does not split the work section.',
+    'Az automatikus becslés a kezdési idősávon belüli, legfeljebb a megadott hosszúságú párt választja. Több jelölt esetén az idősáv közepéhez legközelebbi kezdés nyer.':'The estimate selects a pair starting within the time window and no longer than the maximum. If several match, the start closest to the window midpoint wins.',
+    'A napi listában kézzel másik párt is kijelölhetsz. Az ebéd és a meeting nem lehet ugyanaz a pár. A kiválasztott ebéd mindig kimarad a munkaidőből.':'You can select another pair manually in the daily list. Lunch and meeting cannot be the same pair. Selected lunch is always excluded from work time.',
+    'A korábban választott meetingpár már nem található vagy ebédként van kijelölve; válaszd ki újra.':'The previously selected meeting pair is missing or marked as lunch; select it again.',
+    'Előbb engedélyezd a napi meeting figyelmen kívül hagyását a beállításokban.':'Enable Ignore daily meeting in Settings first.',
     'Munkamenet csatlakoztatása':'Session connected','Munkamenet leválasztása':'Session disconnected',
     'Első kapcsolódás':'First connection','Első észlelt kapcsolódás':'First observed connection',
     'Utolsó leválasztás':'Last disconnect','Legutóbbi leválasztás':'Most recent disconnect',

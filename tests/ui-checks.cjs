@@ -7,9 +7,9 @@ const {parseHTML} = require('linkedom');
   const {window} = parseHTML('<html><body><div id="compusage-cards-preview"></div></body></html>');
   const document = window.document;
   // LinkeDOM models the DOM without launching a browser or interacting with the real clipboard.
-  let receive, clipboard = '', writes = 0, calls = [];
+  let receive, clipboard = '', writes = 0, calls = [], meetingUndo=null;
   const time = (display, exact) => ({display,exact,date:'2026.10.16'});
-  let state = {settings:{dayStart:'04:00:00',expectedLunch:'11:30:00',minimumLunchMinutes:15,splitBreakMinutes:10,historyDays:60,workbookPath:'C:\\test\\work.xlsx',fontScale:1.15,rememberView:true,language:'hu',theme:'auto',lockTimeSource:'lock'},logging:true,permissions:{readAccessRequired:false},activity:{enabled:false,running:false,registered:true},user:'Test',expanded:[],scroll:0,refreshed:'2026.10.19 14:00:00',oldest:null,workbook:{available:true,lastDate:'2026.10.15',days:1,rows:2,partials:0},days:[{key:'2026-10-16',date:'2026.10.16',weekday:'péntek',status:'Lezárt',ongoing:false,incomplete:false,issues:[],first:time('8:02','08:02:14'),last:time('16:48','16:48:09'),manual:false,none:false,undo:false,lunch:{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19},pairs:[{id:'short',from:time('10:16','10:16:03'),to:time('10:20','10:20:09'),minutes:4},{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19}],sections:[{date:'2026.10.16',from:time('8:02','08:02:14'),to:time('11:32','11:32:05'),duration:'03:30',open:false,copy:'2026.10.16\t08:02:14\t11:32:05'},{date:'2026.10.16',from:time('11:51','11:51:34'),to:time('16:48','16:48:09'),duration:'04:57',open:false,copy:'2026.10.16\t11:51:34\t16:48:09'}],copy:'2026.10.16\t08:02:14\t11:32:05\r\n2026.10.16\t11:51:34\t16:48:09',eventCopy:'events',events:[]}]};
+  let state = {settings:{dayStart:'04:00:00',expectedLunch:'11:30:00',minimumLunchMinutes:15,splitBreakMinutes:10,ignoreDailyMeeting:false,meetingStartFrom:'09:25:00',meetingStartUntil:'09:40:00',maximumMeetingMinutes:20,historyDays:60,workbookPath:'C:\\test\\work.xlsx',fontScale:1.15,rememberView:true,language:'hu',theme:'auto',lockTimeSource:'lock'},logging:true,permissions:{readAccessRequired:false},activity:{enabled:false,running:false,registered:true},user:'Test',expanded:[],scroll:0,refreshed:'2026.10.19 14:00:00',oldest:null,workbook:{available:true,lastDate:'2026.10.15',days:1,rows:2,partials:0},days:[{key:'2026-10-16',date:'2026.10.16',weekday:'péntek',status:'Lezárt',ongoing:false,incomplete:false,issues:[],first:time('8:02','08:02:14'),last:time('16:48','16:48:09'),manual:false,none:false,undo:false,lunch:{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19},pairs:[{id:'short',from:time('10:16','10:16:03'),to:time('10:20','10:20:09'),minutes:4},{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19}],sections:[{date:'2026.10.16',from:time('8:02','08:02:14'),to:time('11:32','11:32:05'),duration:'03:30',open:false,copy:'2026.10.16\t08:02:14\t11:32:05'},{date:'2026.10.16',from:time('11:51','11:51:34'),to:time('16:48','16:48:09'),duration:'04:57',open:false,copy:'2026.10.16\t11:51:34\t16:48:09'}],copy:'2026.10.16\t08:02:14\t11:32:05\r\n2026.10.16\t11:51:34\t16:48:09',eventCopy:'events',events:[]}]};
   const clone = value => JSON.parse(JSON.stringify(value));
   function applyActivityReply(message) {
     state.activity.enabled=message.data.activityEnabled;
@@ -22,7 +22,12 @@ const {parseHTML} = require('linkedom');
     day.copy=day.sections.map(s=>s.copy).join('\r\n');
   }
 
-  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:[]};break;case 'commit':writes++;result={state:clone(state),backup:'C:\\test\\backup.xlsx'};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'undo':state.days[0].manual=false;state.days[0].undo=false;result=clone(state);break;case 'previewTheme':break;case 'grantReadAccess':state.permissions.readAccessRequired=false;state.logging=true;result=clone(state);break;case 'view':break;default:throw Error(message.command);}queueMicrotask(()=>receive({data:{id:message.id,ok:true,result}}));}catch(error){queueMicrotask(()=>receive({data:{id:message.id,ok:false,error:error.message}}));}}}};
+  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:[]};break;case 'commit':writes++;result={state:clone(state),backup:'C:\\test\\backup.xlsx'};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'meeting':{
+      const day=state.days[0];meetingUndo=clone(day);day.manualMeeting=message.data.value!==null;day.noMeeting=message.data.value==='none';
+      const pair=message.data.value===null?day.pairs[0]:day.pairs.find(p=>p.id===message.data.value);
+      day.meeting=pair?{id:pair.id,from:clone(pair.from),to:clone(pair.to),minutes:pair.minutes}:null;
+      if(day.meeting?.id===day.lunch?.id){day.lunch=null;day.manual=false;}day.undo=true;result=clone(state);break;
+    }case 'undo':if(meetingUndo){state.days[0]=meetingUndo;meetingUndo=null;}state.days[0].manual=false;state.days[0].undo=false;result=clone(state);break;case 'previewTheme':break;case 'grantReadAccess':state.permissions.readAccessRequired=false;state.logging=true;result=clone(state);break;case 'view':break;default:throw Error(message.command);}queueMicrotask(()=>receive({data:{id:message.id,ok:true,result}}));}catch(error){queueMicrotask(()=>receive({data:{id:message.id,ok:false,error:error.message}}));}}}};
   window.scrollY=0;window.scrollTo=(_x,y)=>{window.scrollY=y;};window.getSelection=()=>({toString:()=>''});
   const context={window,document,NodeFilter:{SHOW_TEXT:4},Event:window.Event,console,setTimeout:()=>0,clearTimeout(){},Map,Set};
   vm.runInNewContext(fs.readFileSync('src/CompUsage.App/Ui/i18n.js','utf8'),context);
@@ -85,6 +90,42 @@ const {parseHTML} = require('linkedom');
   await check('Excel preview never writes until the commit button is pressed',async()=>{await click('[data-append]');assert.equal(writes,0);assert.ok(document.querySelector('[data-commit]'));await click('[data-commit]');assert.equal(writes,1);assert.equal(calls.findLast(c=>c.command==='commit').data.token,'plan');});
   await check('Refresh preserves expanded days and the current scroll position',async()=>{window.scrollY=150;await click('[data-refresh]');assert.equal(window.scrollY,150);assert.equal(node('[data-expand]').getAttribute('aria-expanded'),'true');});
   await check('Localization never rewrites clipboard attributes or user-entered paths',()=>{const div=document.createElement('div');div.innerHTML='<input value="C:\\Munkaidőnapló\\x.xlsx"><button data-copy="Dátum">Dátum</button>';window.i18n.apply(div,'en');assert.equal(div.querySelector('button').textContent,'Date');assert.equal(div.querySelector('button').getAttribute('data-copy'),'Dátum');assert.equal(div.querySelector('input').getAttribute('value'),'C:\\Munkaidőnapló\\x.xlsx');});
+  await check('Daily meeting is off by default and its dedicated tab saves the exact defaults and enabled state',async()=>{
+    assert.equal(state.settings.ignoreDailyMeeting,false);assert.equal(document.querySelector('[data-meeting-summary]'),null);
+    await click('[data-settings]');await click('[data-tab="meeting"]');
+    assert.match(node('#panel-meeting').textContent,/Ignore daily meeting/);
+    assert.equal(Boolean(node('[data-setting="ignoreDailyMeeting"]').checked),false);
+    assert.equal(node('[data-setting="meetingStartFrom"]').value,'09:25');assert.equal(node('[data-setting="meetingStartUntil"]').value,'09:40');
+    assert.equal(node('[data-setting="maximumMeetingMinutes"]').value,'20');
+    const toggle=node('[data-setting="ignoreDailyMeeting"]');toggle.checked=true;toggle.dispatchEvent(new window.Event('input',{bubbles:true}));
+    await click('[data-save]');
+    const saved=calls.findLast(c=>c.command==='settings').data.settings;
+    assert.equal(saved.ignoreDailyMeeting,true);assert.equal(saved.meetingStartFrom,'09:25:00');assert.equal(saved.meetingStartUntil,'09:40:00');assert.equal(saved.maximumMeetingMinutes,20);
+    assert.ok(document.querySelector('[data-meeting-summary]'));assert.ok(document.querySelector('[data-meeting]'));
+  });
+  await check('Daily meeting manual choice, undo, no-meeting and automatic estimate use the native bridge',async()=>{
+    const original=clone(state.days[0]), originalLunch=original.lunch;
+    const select=node('[data-meeting][value="lunch"]');select.checked=true;select.dispatchEvent(new window.Event('change',{bubbles:true}));await flush();
+    const call=calls.findLast(c=>c.command==='meeting');assert.equal(call.data.date,'2026-10-16');assert.equal(call.data.value,'lunch');
+    assert.equal(state.days[0].lunch,null);assert.equal(node('[data-meeting][value="lunch"]').hasAttribute('checked'),true);
+    assert.match(node('[data-meeting-summary]').textContent,/Counts as work/);assert.match(node('[data-meeting-summary]').textContent,/Manual selection/);
+    await click('[data-undo]');assert.equal(state.days[0].lunch.id,originalLunch.id);
+    let radio=node('[data-meeting][value="none"]');radio.checked=true;radio.dispatchEvent(new window.Event('change',{bubbles:true}));await flush();
+    assert.equal(calls.findLast(c=>c.command==='meeting').data.value,'none');assert.match(node('[data-meeting-summary]').textContent,/No daily meeting/);
+    await click('[data-meeting-auto]');assert.equal(calls.findLast(c=>c.command==='meeting').data.value,null);
+    assert.match(node('[data-meeting-summary]').textContent,/Estimated/);
+    const exact=state.days[0].meeting.from.exact;await click(`[data-copy="${exact}"]`);assert.equal(clipboard,exact);
+    state.settings.language='hu';await click('[data-refresh]');assert.match(node('[data-meeting-summary]').textContent,/Napi meeting/);assert.match(node('[data-meeting-summary]').textContent,/Munkaidőnek számít/);
+    state.settings.language='en';state.settings.ignoreDailyMeeting=false;state.days[0]=original;meetingUndo=null;await click('[data-refresh]');
+    assert.equal(document.querySelector('[data-meeting-summary]'),null);assert.equal(document.querySelector('[data-meeting]'),null);
+  });
+  await check('Cancel keeps daily meeting settings unchanged and invalid meeting times cannot reach native settings',async()=>{
+    await click('[data-settings]');await click('[data-tab="meeting"]');await input('[data-setting="meetingStartUntil"]','09:55');await click('[data-cancel]');
+    assert.equal(state.settings.meetingStartUntil,'09:40:00');
+    await click('[data-settings]');await click('[data-tab="meeting"]');await input('[data-setting="meetingStartFrom"]','invalid');
+    const count=calls.filter(c=>c.command==='settings').length;await click('[data-save]');
+    assert.equal(calls.filter(c=>c.command==='settings').length,count);assert.match(node('[data-dialog-error]').textContent,/HH:mm/);await click('[data-cancel]');
+  });
   await check('Session-only endpoints have accurate labels and localized raw events without changing exact copy data',async()=>{
     const day=state.days[0];day.hasSessionEvents=true;day.firstFromSession=true;day.lastFromSession=true;day.lastFromActivity=false;
     day.events=[{time:time('8:02','08:02:14'),eventId:4778,label:'Munkamenet csatlakoztatása',isLock:false},

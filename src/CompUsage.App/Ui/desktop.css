@@ -20,6 +20,9 @@ html,body{margin:0;min-height:100%;font-family:'Segoe UI',sans-serif;background:
 #compusage-cards-preview .cu-dialog [role=tabpanel]{min-height:0;flex:0 1 auto;overflow:auto;padding-right:8px}
 #compusage-cards-preview .cu-work-title svg{vertical-align:middle}
 #compusage-cards-preview .cu-summary-actions{font-size:.9em}
+#compusage-cards-preview .cu-meeting-summary{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;padding:12px 20px;border-top:1px solid var(--cu-line);font-size:.9em}
+#compusage-cards-preview .cu-meeting-summary strong{display:inline-flex;align-items:center;gap:7px}
+#compusage-cards-preview .cu-meeting-chosen{background:var(--cu-good-bg)}
 #compusage-cards-preview .cu-shortcuts{white-space:normal}
 #compusage-cards-preview .cu-logging-warning{margin-top:16px}
 #compusage-cards-preview .cu-logging-warning button{width:100%;justify-content:flex-start;align-items:center;gap:12px;padding:14px 16px;background:var(--cu-warn-bg);color:var(--cu-warn);border-color:var(--cu-warn);text-align:left}

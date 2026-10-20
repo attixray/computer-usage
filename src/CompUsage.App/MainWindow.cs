@@ -22,7 +22,7 @@ public sealed class MainWindow : Window
     private readonly CultureInfo excelCulture = WindowsRegionalCulture.Create();
     private readonly WorkbookService workbook;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly Dictionary<string, string?> undo = [];
+    private readonly Dictionary<string, (string? Lunch, string? Meeting)> undo = [];
     private WorkbookPlan? activePlan;
     private string? planToken;
     private string? lastError;
@@ -130,7 +130,7 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports() => WorkReports.Build(state.Events, state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings);
 
     private void ReadActivity()
     {
@@ -208,16 +208,25 @@ public sealed class MainWindow : Window
                 state.Settings = state.Settings with { HistoryDays = history };
                 activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
             case "lunch":
+            case "meeting":
                 var date = data.GetProperty("date").GetString()!;
                 var chosen = data.GetProperty("value").ValueKind == JsonValueKind.Null ? null : data.GetProperty("value").GetString();
                 var day = Reports().Single(d => d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) == date);
-                if (chosen is not null && chosen != "none" && day.Pairs.All(p => p.Id != chosen)) throw new ArgumentException("Nincs ilyen ebédpár.");
-                undo[date] = state.Lunches.GetValueOrDefault(date);
-                if (chosen is null) state.Lunches.Remove(date); else state.Lunches[date] = chosen;
+                if (chosen is not null && chosen != "none" && day.Pairs.All(p => p.Id != chosen)) throw new ArgumentException("Nincs ilyen szünetpár.");
+                if (command == "meeting" && !state.Settings.IgnoreDailyMeeting) throw new ArgumentException("Előbb engedélyezd a napi meeting figyelmen kívül hagyását a beállításokban.");
+                undo[date] = (state.Lunches.GetValueOrDefault(date), state.Meetings.GetValueOrDefault(date));
+                var choices = command == "meeting" ? state.Meetings : state.Lunches;
+                var otherChoices = command == "meeting" ? state.Lunches : state.Meetings;
+                if (chosen is not null && chosen != "none" && otherChoices.GetValueOrDefault(date) == chosen) otherChoices.Remove(date);
+                if (chosen is null) choices.Remove(date); else choices[date] = chosen;
                 activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
             case "undo":
                 var key = data.GetProperty("date").GetString()!;
-                if (undo.Remove(key, out var old)) { if (old is null) state.Lunches.Remove(key); else state.Lunches[key] = old; }
+                if (undo.Remove(key, out var old))
+                {
+                    if (old.Lunch is null) state.Lunches.Remove(key); else state.Lunches[key] = old.Lunch;
+                    if (old.Meeting is null) state.Meetings.Remove(key); else state.Meetings[key] = old.Meeting;
+                }
                 activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
             case "copy":
                 var text = data.GetProperty("text").GetString() ?? "";
@@ -318,6 +327,8 @@ public sealed class MainWindow : Window
             lastFromActivity = d.Last?.ActivityTimestamp is not null, lastActivity = ActivityValue(d.Last),
             manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.WorkTimestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },
+            meeting = d.Meeting is null ? null : new { id = d.Meeting.Id, from = TimeValue(d.Meeting.Lock.WorkTimestamp, true), to = TimeValue(d.Meeting.Unlock.Timestamp), minutes = (int)d.Meeting.Duration.TotalMinutes },
+            manualMeeting = d.ManualMeeting, noMeeting = d.NoMeeting,
             pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.WorkTimestamp, true), to = TimeValue(p.Unlock.Timestamp), minutes = (int)p.Duration.TotalMinutes,
                 fromActivity = p.Lock.ActivityTimestamp is not null, activity = ActivityValue(p.Lock) }),
             sections = d.Sections.Select(RowSnapshot),

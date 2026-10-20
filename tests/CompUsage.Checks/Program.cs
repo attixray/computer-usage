@@ -115,6 +115,92 @@ Check("Activity tracking defaults off and validates its optional time source", (
     Equal("lock", settings.LockTimeSource);
     Throws<ArgumentException>(() => (settings with { LockTimeSource = "invalid" }).Validate());
 });
+
+List<LockEvent> MeetingDay() => [Event(16,"08:00",false),Event(16,"09:29:43",true),Event(16,"09:41:18",false),
+    Event(16,"11:32:05",true),Event(16,"11:51:34",false),Event(16,"17:00",true)];
+var meetingSettings = settings with {IgnoreDailyMeeting=true};
+WorkReport MeetingReport(IEnumerable<LockEvent> entries, AppSettings? config=null, string? choice=null) =>
+    WorkReports.Build(entries,config??meetingSettings,lunches,now,zone,
+        meetings:choice is null?null:new Dictionary<string,string>{{"2026-10-16",choice}}).Single();
+Check("Daily meeting defaults are off, with a 09:25-09:40 start window and 20-minute maximum", () =>
+{
+    True(!settings.IgnoreDailyMeeting);Equal(new TimeOnly(9,25),settings.MeetingStartFrom);
+    Equal(new TimeOnly(9,40),settings.MeetingStartUntil);Equal(20,settings.MaximumMeetingMinutes);
+    Throws<ArgumentException>(()=>(settings with {MaximumMeetingMinutes=0}).Validate());
+    Throws<ArgumentException>(()=>(settings with {MaximumMeetingMinutes=121}).Validate());
+});
+Check("An enabled daily meeting stays in work sections and exact copied rows, while lunch remains excluded", () =>
+{
+    var entries=MeetingDay();var baseline=Report(entries);var day=MeetingReport(entries);
+    Equal(3,baseline.Sections.Count);Equal(2,day.Sections.Count);Equal(entries[1].RecordId,day.Meeting!.Lock.RecordId);
+    Equal("2026.10.16\t08:00:00\t11:32:05",Presentation.CopyRow(day.Sections[0],zone));
+    Equal(baseline.Lunch!.Id,day.Lunch!.Id);Equal(entries[2].Timestamp,day.Meeting.Unlock.Timestamp);
+    Equal(baseline.Sections.Sum(s=>s.Duration.Ticks)+day.Meeting.Duration.Ticks,day.Sections.Sum(s=>s.Duration.Ticks));
+});
+Check("Meeting start bounds and duration maximum are inclusive and use original seconds", () =>
+{
+    foreach(var start in new[]{"09:25:00","09:40:00"})
+    {
+        var entries=MeetingDay();entries[1]=entries[1] with {Timestamp=At(16,start)};
+        entries[2]=entries[2] with {Timestamp=entries[1].Timestamp.AddMinutes(20)};
+        True(MeetingReport(entries).Meeting is not null);
+        entries[2]=entries[2] with {Timestamp=entries[2].Timestamp.AddSeconds(1)};
+        True(MeetingReport(entries).Meeting is null);
+    }
+    foreach(var start in new[]{"09:24:59","09:40:01"})
+    {
+        var entries=MeetingDay();entries[1]=entries[1] with {Timestamp=At(16,start)};
+        entries[2]=entries[2] with {Timestamp=entries[1].Timestamp.AddMinutes(12)};
+        True(MeetingReport(entries).Meeting is null);
+    }
+});
+Check("Only one daily meeting is guessed, closest to the start-window midpoint with a deterministic tie", () =>
+{
+    LockEvent[] entries=[Event(16,"08:00",false),Event(16,"09:25",true),Event(16,"09:29",false),
+        Event(16,"09:30",true),Event(16,"09:34",false),Event(16,"09:35",true),Event(16,"09:39",false),Event(16,"17:00",true)];
+    Equal(entries[3].RecordId,MeetingReport(entries).Meeting!.Lock.RecordId);
+});
+Check("Manual meeting choices override guess limits, no-meeting restores splitting, and disabling suspends saved choices", () =>
+{
+    var entries=MeetingDay();var chosen=MeetingReport(entries).Meeting!.Id;
+    var day=MeetingReport(entries,meetingSettings with {MaximumMeetingMinutes=1,MeetingStartFrom=new(10,0),MeetingStartUntil=new(10,15)},chosen);
+    True(day.ManualMeeting);Equal(chosen,day.Meeting!.Id);Equal(2,day.Sections.Count);
+    day=MeetingReport(entries,choice:"none");True(day.NoMeeting&&day.ManualMeeting&&day.Meeting is null);Equal(3,day.Sections.Count);
+    day=MeetingReport(entries,settings,chosen);True(!day.ManualMeeting&&day.Meeting is null);Equal(3,day.Sections.Count);
+    day=MeetingReport(entries,settings,"stale");True(!day.Incomplete);
+    day=MeetingReport(entries,choice:"stale");True(day.Incomplete);Equal(0,day.Sections.Count);
+});
+Check("The meeting guess precedes an automatic lunch guess, but an explicit lunch always wins", () =>
+{
+    LockEvent[] entries=[Event(16,"08:00",false),Event(16,"09:40",true),Event(16,"10:00",false),Event(16,"17:00",true)];
+    var day=MeetingReport(entries);True(day.Meeting is not null&&day.Lunch is null);Equal(1,day.Sections.Count);
+    var chosen=day.Meeting!.Id;lunches["2026-10-16"]=chosen;
+    day=MeetingReport(entries);True(day.Meeting is null);Equal(chosen,day.Lunch!.Id);Equal(2,day.Sections.Count);
+    day=MeetingReport(entries,choice:chosen);True(day.Meeting is null&&day.Incomplete);Equal(chosen,day.Lunch!.Id);
+    lunches.Clear();
+});
+Check("Meeting matching follows the selected activity endpoint and duration without changing raw locks", () =>
+{
+    var entries=MeetingDay();entries[2]=entries[2] with {Timestamp=At(16,"09:45")};
+    ActivityLock[] records=[new(entries[1].Timestamp,At(16,"09:25"),entries[1].Timestamp.AddSeconds(-1),"1")];
+    var config=meetingSettings with {LockTimeSource="activity"};
+    var day=WorkReports.Build(entries,config,lunches,now,zone,activity:records).Single();
+    Equal(At(16,"09:25"),day.Meeting!.Lock.WorkTimestamp);Equal(entries[1].Timestamp,day.Meeting.Lock.Timestamp);
+    entries[2]=entries[2] with {Timestamp=At(16,"09:45:01")};
+    True(WorkReports.Build(entries,config,lunches,now,zone,activity:records).Single().Meeting is null);
+});
+Check("Session disconnect pairs can be daily meetings, while incomplete days remain excluded", () =>
+{
+    var entries=MeetingDay();entries[1]=entries[1] with {EventId=4779,SessionId=""};entries[2]=entries[2] with {EventId=4778,SessionId=""};
+    var day=MeetingReport(entries);Equal(4779,day.Meeting!.Lock.EventId);Equal(2,day.Sections.Count);
+    day=MeetingReport(entries.Skip(1));True(day.Incomplete);Equal(0,day.Sections.Count);
+});
+Check("A meeting start window can cross midnight within the configured workday", () =>
+{
+    LockEvent[] entries=[Event(16,"20:00",false),Event(16,"23:59",true),Event(17,"00:12",false),Event(17,"03:00",true)];
+    var day=MeetingReport(entries,meetingSettings with {MeetingStartFrom=new(23,55),MeetingStartUntil=new(0,10)});
+    True(!day.Incomplete);Equal(entries[1].RecordId,day.Meeting!.Lock.RecordId);Equal(1,day.Sections.Count);
+});
 Check("Input ticks handle 32-bit rollover and reject impossible future input", () =>
 {
     Equal(now.AddMilliseconds(-1500), ActivityHistory.InputTime(now, (ulong)uint.MaxValue + 1001, uint.MaxValue - 499)!.Value);
@@ -204,6 +290,18 @@ try
         Equal(2,journal.ReadAll().Count); Equal(1,journal.Load("1").Locks.Count);
         journal.Configure(false); True(!journal.Configuration().Enabled); Equal(1,journal.Load("1").Locks.Count);
         Throws<ArgumentException>(()=>journal.Load("../state"));
+    });
+    Check("Excel append keeps the daily meeting inside a continuous row and still excludes lunch",()=>
+    {
+        var path=Fixture("meeting-write");
+        var days=WorkReports.Build(MeetingDay(),meetingSettings,lunches,now,zone);
+        var plan=service.Preview(path,days);Equal(2,plan.Rows.Count);
+        Equal(At(16,"08:00"),plan.Rows[0].From);Equal(At(16,"11:32:05"),plan.Rows[0].To);
+        service.Commit(plan,[]);
+        using var book=new XLWorkbook(path);var sheet=book.Worksheet("Details");
+        True(Math.Abs((At(16,"08:00").TimeOfDay-sheet.Cell(3,2).GetTimeSpan()).TotalMilliseconds)<1);
+        True(Math.Abs((At(16,"11:32:05").TimeOfDay-sheet.Cell(3,3).GetTimeSpan()).TotalMilliseconds)<1);
+        True(Math.Abs((At(16,"11:51:34").TimeOfDay-sheet.Cell(4,2).GetTimeSpan()).TotalMilliseconds)<1);
     });
     Check("Excel append writes the selected activity endpoint with original seconds",()=>
     {

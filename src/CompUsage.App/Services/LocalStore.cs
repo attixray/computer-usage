@@ -7,6 +7,7 @@ public sealed class LocalState
 {
     public AppSettings Settings { get; set; } = new();
     public Dictionary<string, string> Lunches { get; set; } = [];
+    public Dictionary<string, string> Meetings { get; set; } = [];
     public List<LockEvent> Events { get; set; } = [];
     public List<LoggingGap> Gaps { get; set; } = [];
     public string[] Expanded { get; set; } = [];
@@ -48,6 +49,7 @@ public sealed class LocalStore
         var cutoff = today.AddDays(-59);
         state.Events.RemoveAll(e => WorkDayClock.GetDate(e.Timestamp, state.Settings.DayStart, TimeZoneInfo.Local) < cutoff);
         foreach (var key in state.Lunches.Keys.Where(k => !DateOnly.TryParse(k, out var date) || date < cutoff).ToArray()) state.Lunches.Remove(key);
+        foreach (var key in state.Meetings.Keys.Where(k => !DateOnly.TryParse(k, out var date) || date < cutoff).ToArray()) state.Meetings.Remove(key);
         state.Gaps.RemoveAll(g => g.To is { } to && to < DateTimeOffset.UtcNow.AddDays(-61));
         Directory.CreateDirectory(DirectoryPath);
         var temp = path + ".tmp";

@@ -7,6 +7,7 @@ A local Windows work-log application based on the current user's lock and unlock
 - Up to 60 days of Security log events, with a local cache of previously read events. Session reconnect/disconnect events (4778/4779) cover RDP and console switches that do not produce a lock/unlock (4800/4801).
 - Configurable workday boundary (04:00), expected lunch (11:30), minimum lunch duration (15 minutes), and work-section split threshold (10 minutes).
 - Automatic lunch suggestion, manual pair selection, no-lunch selection, and undo.
+- Optional daily meeting exception (off by default): a start between 09:25 and 09:40 and a maximum duration of 20 minutes. The selected meeting counts as work and keeps the work section continuous.
 - Large, selectable dates/times; exact-second copy icons; individual section and whole-day copying as headerless Date/From/To TSV.
 - Ctrl+C / Ctrl+Insert and Ctrl+V / Shift+Insert. Display follows the workbook's date/time formats and Windows regional separators. Hidden seconds are not rounded; copy icons and Excel writing preserve original seconds.
 - Hungarian and English UI; system, dark, and light themes.
@@ -41,6 +42,10 @@ The reader includes Security events 4778/4779 from the same auditing subcategory
 
 Breaks strictly longer than the split threshold are excluded and split work rows. Shorter ordinary breaks count as work. The selected lunch break is always excluded, including a short manual lunch. Calculations use the original instants, not formatted display text. Workday grouping uses the local Windows time zone and handles daylight-saving boundaries.
 
+Settings → Daily meeting contains **Ignore daily meeting**, its expected start window (09:25–09:40) and maximum length (20 minutes). This feature defaults to off. The window applies to the start, so a meeting can finish after 09:40. Both window endpoints and the maximum duration are inclusive, using original seconds. A window crossing midnight is supported. If several pairs qualify, the start closest to the window midpoint wins, with the earlier pair breaking a tie. Only one daily meeting is selected.
+
+An enabled daily meeting exception takes precedence over the ordinary split threshold and the automatic lunch guess. An explicit lunch selection always takes precedence and remains excluded. The daily event list supports manual meeting selection, no-meeting selection, restoring the estimate, and undo. Like a manual lunch choice, a manual meeting overrides the estimate's time and length limits. Selecting an existing lunch pair as a meeting, or the reverse, clears the conflicting manual selection; undo restores both choices together. A stale selected pair requires review. Turning the feature off suspends its effect while retaining saved choices. The selected lock-time or last-input endpoint is used consistently for the meeting window, length and resulting work sections. Summary, TSV copying, Details preview and Excel writing all use the same calculation.
+
 Current days and visibly incomplete or ambiguous event sequences are excluded from automatic append. A current day's finished sections can still be copied individually. Multiple Windows sessions are marked for manual review. Windows cannot recover events from before auditing was enabled or after they were lost from the log; missing events cannot always be detected just from an alternating sequence. These are observed computer-unlock intervals, not proof of working time.
 
 ## Excel behavior
@@ -64,6 +69,8 @@ This is an input-time estimate, not a guaranteed manual/automatic-lock classifie
 ## Local data
 
 Preferences, manual lunch choices, cached events, and window state are stored in `%LocalAppData%\CompUsage\state.json`. The WebView2 profile lives in the same application data folder. Uninstall keeps this data and all workbooks. No event log, workbook, or user configuration belongs in the Git repository.
+
+Manual daily meeting choices are stored alongside lunch choices in `state.json`, with the same 60-day retention. Existing settings files load with the feature disabled and the new defaults.
 
 The optional monitor uses `%LocalAppData%\CompUsage\Activity\configuration.json`, separate session journals and small heartbeat files. The UI never writes the monitor's history, and the monitor never writes UI state. These files stay local and are retained on uninstall.
 

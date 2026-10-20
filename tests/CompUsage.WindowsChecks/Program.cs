@@ -23,6 +23,18 @@ internal static class Program
             var checks = 0;
             void Check(string name, Action test) { test(); checks++; Console.WriteLine("PASS " + name); }
             const string sid = "S-1-5-21-123-456-789-1001";
+            Check("Legacy settings keep daily meetings disabled and manual meeting choices survive a JSON round trip", () =>
+            {
+                var legacy=System.Text.Json.JsonSerializer.Deserialize<LocalState>("{\"Settings\":{\"ExpectedLunch\":\"11:30:00\"}}")!;
+                Require(!legacy.Settings.IgnoreDailyMeeting && legacy.Meetings.Count==0);
+                Require(legacy.Settings.MeetingStartFrom==new TimeOnly(9,25) && legacy.Settings.MeetingStartUntil==new TimeOnly(9,40));
+                Require(legacy.Settings.MaximumMeetingMinutes==20);
+                legacy.Settings=legacy.Settings with {IgnoreDailyMeeting=true};legacy.Meetings["2026-10-16"]="example-pair";
+                var loaded=System.Text.Json.JsonSerializer.Deserialize<LocalState>(System.Text.Json.JsonSerializer.Serialize(legacy))!;
+                Require(loaded.Settings.IgnoreDailyMeeting && loaded.Meetings["2026-10-16"]=="example-pair");
+                loaded.Settings=loaded.Settings with {IgnoreDailyMeeting=false};
+                Require(loaded.Meetings["2026-10-16"]=="example-pair");
+            });
             Check("A second launch queues activation during startup and can activate the existing instance repeatedly", () =>
             {
                 var name = "CompUsage.Check." + Guid.NewGuid().ToString("N");
