@@ -156,6 +156,57 @@ Check("Disconnecting a locked console session before an RDP reconnect does not r
     True(!day.Incomplete); Equal(2, day.Sections.Count); Equal(At(16,"18:37:37"), day.Sections[0].To);
     Equal(At(16,"19:33:54"), day.Sections[1].From); Equal(At(16,"21:25:29"), day.Sections[1].To);
 });
+LockEvent[] SleepPeriod(int day, string from, string until) { var record = id++;
+    return [new(record, At(day, from), LockEvent.Sleep, "", "", "", "", ""), new(record, At(day, until), LockEvent.Wake, "", "", "", "", "")]; }
+LockEvent SystemEvent(int day, string time, int eventId) => new(id++, At(day, time), eventId, "", "", "", "", "");
+Check("System-log XML yields exact sleep endpoints, the UTC last-alive time and shutdowns", () =>
+{
+    const string wake = "<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\"><System><Provider Name=\"Microsoft-Windows-Power-Troubleshooter\"/><EventID>1</EventID><EventRecordID>70</EventRecordID><TimeCreated SystemTime=\"2026-10-21T06:24:05Z\"/></System><EventData><Data Name=\"SleepTime\">2026-10-21T00:13:46.3083346Z</Data><Data Name=\"WakeTime\">2026-10-21T06:24:04.6372246Z</Data></EventData></Event>";
+    var sleep = EventXmlParser.ParseSystem(wake);
+    Equal(2, sleep.Count); Equal(LockEvent.Sleep, sleep[0].EventId); True(sleep[0].IsLock && sleep[0].IsSystemEvent && !sleep[1].IsLock);
+    Equal(new DateTimeOffset(2026,10,21,0,13,46,TimeSpan.Zero).AddTicks(3083346), sleep[0].Timestamp); Equal(70L, sleep[1].RecordId);
+    Equal(0, EventXmlParser.ParseSystem(wake.Replace("Power-Troubleshooter", "Other")).Count);
+    Equal(0, EventXmlParser.ParseSystem(wake.Replace("2026-10-21T06:24:04", "2026-10-20T06:24:04")).Count);
+    const string crash = "<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\"><System><Provider Name=\"EventLog\"/><EventID Qualifiers=\"32768\">6008</EventID><EventRecordID>71</EventRecordID><TimeCreated SystemTime=\"2026-10-09T21:24:58Z\"/></System><EventData><Data></Data><Binary>EA070A0005000900160039000E00B101EA070A0005000900140039000E00B101600900003C000000</Binary></EventData></Event>";
+    var lost = EventXmlParser.ParseSystem(crash).Single();
+    Equal(LockEvent.UnexpectedShutdown, lost.EventId); Equal(new DateTimeOffset(2026,10,9,20,57,14,433,TimeSpan.Zero), lost.Timestamp);
+    Equal(0, EventXmlParser.ParseSystem(crash.Replace("EA070A0005000900160039000E00B101EA07", "EA07")).Count);
+    var stop = EventXmlParser.ParseSystem(wake.Replace("Power-Troubleshooter", "Kernel-General").Replace("<EventID>1<", "<EventID>13<")).Single();
+    Equal(LockEvent.SystemShutdown, stop.EventId); Equal(new DateTimeOffset(2026,10,21,6,24,5,TimeSpan.Zero), stop.Timestamp);
+    True(EventXmlParser.Parse(wake) is null);
+});
+Check("Sleep while signed in is a break; sleep after a lock and an orderly shutdown after sign-out are ignored", () =>
+{
+    var day = Report([Event(16,"08:00",false), ..SleepPeriod(16,"12:00","12:40"), Event(16,"17:00",true)]);
+    True(!day.Incomplete); Equal(1, day.Pairs.Count); Equal(LockEvent.Sleep, day.Lunch!.Lock.EventId); Equal(LockEvent.Wake, day.Lunch.Unlock.EventId);
+    Equal(2, day.Sections.Count); Equal(At(16,"12:00"), day.Sections[0].To); Equal(4, day.Events.Count);
+    day = Report([Event(16,"08:00",false), Event(16,"12:00",true), ..SleepPeriod(16,"12:01","12:40"), Event(16,"12:41",false),
+        Event(16,"17:00",true), SystemEvent(16,"17:00:10",LockEvent.SystemShutdown)]);
+    True(!day.Incomplete); Equal(4, day.Events.Count); Equal(1, day.Pairs.Count); Equal(4800, day.Last!.EventId);
+    day = Report([Event(16,"08:00",false), SystemEvent(16,"17:33:17",LockEvent.SystemShutdown)]);
+    True(!day.Incomplete); Equal(LockEvent.SystemShutdown, day.Last!.EventId); Equal(At(16,"17:33:17"), day.Sections[0].To);
+});
+Check("Sleep and hibernation merge, and a wake to the lock screen restarts work at the unlock", () =>
+{
+    var first = SleepPeriod(16,"12:00","12:00:40"); var second = SleepPeriod(16,"12:00","12:40");
+    var merged = SessionEvents.MergeSleeps([..first, ..second]);
+    Equal(2, merged.Count); Equal(At(16,"12:00"), merged[0].Timestamp); Equal(At(16,"12:40"), merged[1].Timestamp);
+    foreach (var resumeLock in new[] { true, false })
+    {
+        LockEvent[] entries = [Event(16,"08:00",false), ..first, ..second, Event(16,"12:55",false), Event(16,"17:00",true)];
+        var day = Report(resumeLock ? entries.Append(Event(16,"12:40:02",true)) : entries);
+        True(!day.Incomplete); Equal(1, day.Pairs.Count); Equal(LockEvent.Sleep, day.Pairs[0].Lock.EventId);
+        Equal(4801, day.Pairs[0].Unlock.EventId); Equal(At(16,"12:55"), day.Sections[1].From);
+    }
+});
+Check("An unexpected shutdown ends work at the last-alive time and the next sign-in continues the day", () =>
+{
+    var day = Report([Event(16,"08:00",false), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown),
+        SignIn(16,"15:58:10","0x9"), SignOut(16,"17:00","0x9")]);
+    True(!day.Incomplete); Equal(2, day.Sections.Count); Equal(At(16,"15:31:19"), day.Sections[0].To);
+    Equal(At(16,"15:58:10"), day.Sections[1].From); Equal(LockEvent.UnexpectedShutdown, day.Pairs[0].Lock.EventId);
+    True(Report([Event(16,"08:00",false), Event(16,"12:00",true), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown)]).Events.All(e => !e.IsSystemEvent));
+});
 Check("Today's sign-in after boot starts work, while interleaved sessions still need review", () =>
 {
     var today = Report([SignIn(19,"08:21:27","0x1"), Event(19,"08:32:27",true), Event(19,"08:45:15",false)]);
@@ -431,13 +482,62 @@ try
     });
     Check("Workbook formats and built-in h:mm are preserved instead of replaced",()=>{var path=Fixture("formats");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Column(1).Style.NumberFormat.Format="yyyy/mm/dd;@";s.Columns(2,4).Style.NumberFormat.NumberFormatId=20;s.Cell(3,3).Style.NumberFormat.NumberFormatId=21;b.Save();}var p=service.Preview(path,reports);Equal("yyyy/mm/dd;@",p.Formats.Date);Equal("h:mm",p.Formats.Start);Equal("h:mm:ss",p.Formats.End);var display=new ExcelDisplay(p.Formats,huCulture,zone);Equal("8:01",display.Time(At(16,"08:01:37")));Equal("8:01:37",display.Time(At(16,"08:01:37"),true));service.Commit(p,[]);using var result=new XLWorkbook(path);var s2=result.Worksheet("Details");Equal("yyyy/mm/dd;@",s2.Cell(3,1).Style.NumberFormat.Format);Equal(20,s2.Cell(3,2).Style.NumberFormat.NumberFormatId);Equal(21,s2.Cell(3,3).Style.NumberFormat.NumberFormatId);});
     Check("A partial row matches an Excel-displayed minute while keeping the existing start",()=>{var path=Fixture("truncated-start");var days=WorkReports.Build(Day(14,"08:11:37","17:03:55").Concat(Day(15)),settings,lunches,now,zone);var p=service.Preview(path,days);Equal(1,p.Partials.Count);Equal("08:11:00",Presentation.Time(p.Partials[0].Interval.From,zone,true));});
-    Check("Workbook preview appends only newer closed days and offers a rounded-start partial",()=>{var path=Fixture("preview");var p=service.Preview(path,reports);Equal(new DateOnly(2026,10,14),p.LastDate!.Value);Equal(4,p.Rows.Count);Equal(1,p.Partials.Count);Equal("08:11:00",Presentation.Time(p.Partials[0].Interval.From,zone,true));Equal("11:32:05",Presentation.Time(p.Partials[0].Interval.To,zone,true));});
-    Check("Workbook commit keeps other sheets and descriptions byte-for-byte, creates a backup, and preserves seconds",()=>{var path=Fixture("write");var original=File.ReadAllBytes(path);var before=Entries(path);var p=service.Preview(path,reports);var backup=service.Commit(p,[2]);True(original.SequenceEqual(File.ReadAllBytes(backup)));var after=Entries(path);True(before["xl/worksheets/sheet2.xml"].SequenceEqual(after["xl/worksheets/sheet2.xml"]));using var result=new XLWorkbook(path);var s=result.Worksheet("Details");Equal("Existing description",s.Cell(2,6).GetString());True(s.Cell(2,4).HasFormula);Equal("MOD(C2-B2,1)",s.Cell(2,4).FormulaA1);True(Math.Abs((At(15,"08:02:14").TimeOfDay-s.Cell(3,2).GetTimeSpan()).TotalMilliseconds)<1);Equal("yyyy.mm.dd",s.Cell(3,1).Style.NumberFormat.Format);Equal("hh:mm",s.Cell(3,2).Style.NumberFormat.Format);Equal(0,service.Preview(path,reports).Rows.Count);Equal(0,service.Preview(path,reports).Partials.Count);});
+    Check("Workbook preview appends only newer closed days and offers a rounded-start partial",()=>{var path=Fixture("preview");var p=service.Preview(path,reports);Equal(new DateOnly(2026,10,14),p.LastDate!.Value);Equal(6,p.Rows.Count);True(p.Rows[^1].Open&&!p.Rows[^2].Open);Equal(1,p.Partials.Count);Equal("08:11:00",Presentation.Time(p.Partials[0].Interval.From,zone,true));Equal("11:32:05",Presentation.Time(p.Partials[0].Interval.To,zone,true));Equal(1,p.Partials[0].Following.Count);Equal("11:51:34",Presentation.Time(p.Partials[0].Following[0].From,zone,true));});
+    Check("Workbook commit keeps other sheets and descriptions byte-for-byte, creates a backup, and preserves seconds",()=>{var path=Fixture("write");var original=File.ReadAllBytes(path);var before=Entries(path);var p=service.Preview(path,reports);var backup=service.Commit(p,[2]);True(original.SequenceEqual(File.ReadAllBytes(backup)));var after=Entries(path);True(before["xl/worksheets/sheet2.xml"].SequenceEqual(after["xl/worksheets/sheet2.xml"]));using var result=new XLWorkbook(path);var s=result.Worksheet("Details");Equal("Existing description",s.Cell(2,6).GetString());True(s.Cell(2,4).HasFormula);Equal("MOD(C2-B2,1)",s.Cell(2,4).FormulaA1);True(Math.Abs((At(14,"11:51:34").TimeOfDay-s.Cell(3,2).GetTimeSpan()).TotalMilliseconds)<1);Equal(new DateTime(2026,10,14),s.Cell(3,1).GetDateTime());True(Math.Abs((At(15,"08:02:14").TimeOfDay-s.Cell(4,2).GetTimeSpan()).TotalMilliseconds)<1);Equal("yyyy.mm.dd",s.Cell(3,1).Style.NumberFormat.Format);Equal("hh:mm",s.Cell(3,2).Style.NumberFormat.Format);Equal(0,service.Preview(path,reports).Rows.Count);Equal(0,service.Preview(path,reports).Partials.Count);});
     Check("Stale preview cannot overwrite an intervening workbook edit",()=>{var path=Fixture("stale");var p=service.Preview(path,reports);using(var b=new XLWorkbook(path)){b.Worksheet("Details").Cell(2,6).Value="New external edit";b.Save();}var changed=File.ReadAllBytes(path);Throws<IOException>(()=>service.Commit(p,[]));True(changed.SequenceEqual(File.ReadAllBytes(path)));});
     Check("An Excel file lock prevents any write",()=>{var path=Fixture("locked");var p=service.Preview(path,reports);using var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);Throws<IOException>(()=>service.Commit(p,[]));});
-    Check("Unselected partial remains unchanged",()=>{var path=Fixture("partial");service.Commit(service.Preview(path,reports),[]);using var b=new XLWorkbook(path);True(b.Worksheet("Details").Cell(2,3).IsEmpty());});
+    Check("Shares that deny ReplaceFile still get an exact backup and a one-step rename, never a stale overwrite",()=>{
+        var dir=Directory.CreateTempSubdirectory("cu-rename").FullName;
+        try{
+            string F(string n)=>Path.Combine(dir,n);string Hash(string p)=>Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(p)));
+            File.WriteAllText(F("book.xlsx"),"original");File.WriteAllText(F("new.tmp"),"updated");var fingerprint=Hash(F("book.xlsx"));
+            WorkbookService.ReplaceByRename(F("new.tmp"),F("book.xlsx"),F("backup.xlsx"),fingerprint);
+            Equal("updated",File.ReadAllText(F("book.xlsx")));Equal("original",File.ReadAllText(F("backup.xlsx")));True(!File.Exists(F("new.tmp")));
+            File.WriteAllText(F("new.tmp"),"again");
+            Throws<IOException>(()=>WorkbookService.ReplaceByRename(F("new.tmp"),F("book.xlsx"),F("backup2.xlsx"),fingerprint));
+            Equal("updated",File.ReadAllText(F("book.xlsx")));True(!File.Exists(F("backup2.xlsx")));
+            File.Move(F("book.xlsx"),F("backup3.xlsx"));
+            WorkbookService.ReplaceByRename(F("new.tmp"),F("book.xlsx"),F("backup3.xlsx"),fingerprint);Equal("again",File.ReadAllText(F("book.xlsx")));
+            File.WriteAllText(F("new.tmp"),"x");Throws<FileNotFoundException>(()=>WorkbookService.ReplaceByRename(F("new.tmp"),F("missing.xlsx"),F("none.xlsx"),fingerprint));
+        }finally{Directory.Delete(dir,true);}
+    });
+    Check("A partial start within three minutes continues today's ongoing day up to the latest data",()=>{
+        string Partial(string name,int minute){var path=Fixture(name);using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,19);s.Cell(2,2).Value=TimeSpan.FromHours(8)+TimeSpan.FromMinutes(minute);b.Save();}return path;}
+        var path=Partial("ongoing-partial",0);var p=service.Preview(path,reports);
+        Equal(1,p.Partials.Count);Equal("08:00:00",Presentation.Time(p.Partials[0].Interval.From,zone,true));Equal("11:32:05",Presentation.Time(p.Partials[0].Interval.To,zone,true));
+        Equal(1,p.Partials[0].Following.Count);True(p.Partials[0].Following[0].Open);Equal(now,p.Partials[0].Following[0].To);
+        service.Commit(p,[2]);
+        using(var result=new XLWorkbook(path)){var s=result.Worksheet("Details");
+            True(Math.Abs((At(19,"11:32:05").TimeOfDay-s.Cell(2,3).GetTimeSpan()).TotalMilliseconds)<1);
+            True(Math.Abs((At(19,"11:51:34").TimeOfDay-s.Cell(3,2).GetTimeSpan()).TotalMilliseconds)<1);
+            True(s.Cell(3,3).IsEmpty()&&s.Cell(3,4).IsEmpty()&&s.Cell(3,5).IsEmpty());True(s.Cell(4,1).IsEmpty());}
+        var again=service.Preview(path,reports);Equal(0,again.Partials.Count);Equal(0,again.Rows.Count);
+        Equal(0,service.Preview(Partial("far-partial",-2),reports).Partials.Count);
+        Equal(1,service.Preview(Partial("late-partial",5),reports).Partials.Count);
+    });    Check("Today is appended with a blank open end, then completed and continued on a later append",()=>{
+        var path=Fixture("today-open");using(var b=new XLWorkbook(path)){b.Worksheet("Details").Cell(2,3).Value=TimeSpan.FromHours(17);b.Save();}
+        var today=WorkReports.Build(Day(19).SkipLast(1),settings,lunches,now,zone);
+        var p=service.Preview(path,today);Equal(2,p.Rows.Count);service.Commit(p,[]);
+        using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");True(!s.Cell(3,3).IsEmpty());
+            True(Math.Abs((At(19,"11:51:34").TimeOfDay-s.Cell(4,2).GetTimeSpan()).TotalMilliseconds)<1);True(s.Cell(4,3).IsEmpty()&&s.Cell(4,4).IsEmpty());}
+        var later=now.AddHours(3);var events=Day(19).SkipLast(1).Concat([Event(19,"15:00",true),Event(19,"15:30",false)]);
+        var days=WorkReports.Build(events,settings,lunches,later,zone);p=service.Preview(path,days);
+        Equal(0,p.Rows.Count);Equal(1,p.Partials.Count);Equal(4,p.Partials[0].Row);True(p.Partials[0].CompletesRow);
+        Equal("15:00:00",Presentation.Time(p.Partials[0].Interval.To,zone,true));Equal(1,p.Partials[0].Following.Count);True(p.Partials[0].Following[0].Open);
+        service.Commit(p,[4]);
+        using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");True(Math.Abs((At(19,"15:00").TimeOfDay-s.Cell(4,3).GetTimeSpan()).TotalMilliseconds)<1);
+            True(Math.Abs((At(19,"15:30").TimeOfDay-s.Cell(5,2).GetTimeSpan()).TotalMilliseconds)<1);True(s.Cell(5,3).IsEmpty());}
+    });
+    Check("A complete last row written during a break continues with the day's later sections",()=>{
+        var path=Fixture("break-continue");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,19);s.Cell(2,2).Value=TimeSpan.Parse("08:02:14");s.Cell(2,3).Value=TimeSpan.Parse("11:32:05");b.Save();}
+        var p=service.Preview(path,reports);Equal(0,p.Rows.Count);Equal(1,p.Partials.Count);var c=p.Partials[0];
+        True(!c.CompletesRow);Equal(2,c.Row);Equal("11:51:34",Presentation.Time(c.Interval.From,zone,true));True(c.Interval.Open);Equal(0,c.Following.Count);
+        service.Commit(p,[2]);
+        using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");True(Math.Abs((At(19,"11:32:05").TimeOfDay-s.Cell(2,3).GetTimeSpan()).TotalMilliseconds)<1);
+            True(Math.Abs((At(19,"11:51:34").TimeOfDay-s.Cell(3,2).GetTimeSpan()).TotalMilliseconds)<1);True(s.Cell(3,3).IsEmpty());}
+    });    Check("Unselected partial remains unchanged",()=>{var path=Fixture("partial");service.Commit(service.Preview(path,reports),[]);using var b=new XLWorkbook(path);True(b.Worksheet("Details").Cell(2,3).IsEmpty());});
     Check("Incorrect Details schema fails before modification",()=>{var path=Fixture("schema");using(var b=new XLWorkbook(path)){b.Worksheet("Details").Cell(1,1).Value="Wrong";b.Save();}Throws<InvalidDataException>(()=>service.Preview(path,reports));});
-    Check("1904 date workbooks retain their epoch",()=>{var path=Fixture("epoch");using(var z=ZipFile.Open(path,ZipArchiveMode.Update)){XNamespace n="http://schemas.openxmlformats.org/spreadsheetml/2006/main";var e=z.GetEntry("xl/workbook.xml")!;XDocument book;using(var s=e.Open())book=XDocument.Load(s);var prop=book.Root!.Element(n+"workbookPr");if(prop is null){prop=new XElement(n+"workbookPr");book.Root.AddFirst(prop);}prop.SetAttributeValue("date1904",1);e.Delete();using(var s=z.CreateEntry("xl/workbook.xml").Open())book.Save(s);e=z.GetEntry("xl/worksheets/sheet1.xml")!;XDocument sheet;using(var s=e.Open())sheet=XDocument.Load(s);sheet.Descendants(n+"c").Single(c=>(string?)c.Attribute("r")=="A2").Element(n+"v")!.Value=(new DateTime(2026,10,14).ToOADate()-1462).ToString(CultureInfo.InvariantCulture);e.Delete();using(var s=z.CreateEntry("xl/worksheets/sheet1.xml").Open())sheet.Save(s);}var p=service.Preview(path,reports);True(p.Date1904);Equal(new DateOnly(2026,10,14),p.LastDate!.Value);service.Commit(p,[]);Equal(new DateOnly(2026,10,16),service.Preview(path,reports).LastDate!.Value);});
+    Check("1904 date workbooks retain their epoch",()=>{var path=Fixture("epoch");using(var z=ZipFile.Open(path,ZipArchiveMode.Update)){XNamespace n="http://schemas.openxmlformats.org/spreadsheetml/2006/main";var e=z.GetEntry("xl/workbook.xml")!;XDocument book;using(var s=e.Open())book=XDocument.Load(s);var prop=book.Root!.Element(n+"workbookPr");if(prop is null){prop=new XElement(n+"workbookPr");book.Root.AddFirst(prop);}prop.SetAttributeValue("date1904",1);e.Delete();using(var s=z.CreateEntry("xl/workbook.xml").Open())book.Save(s);e=z.GetEntry("xl/worksheets/sheet1.xml")!;XDocument sheet;using(var s=e.Open())sheet=XDocument.Load(s);sheet.Descendants(n+"c").Single(c=>(string?)c.Attribute("r")=="A2").Element(n+"v")!.Value=(new DateTime(2026,10,14).ToOADate()-1462).ToString(CultureInfo.InvariantCulture);e.Delete();using(var s=z.CreateEntry("xl/worksheets/sheet1.xml").Open())sheet.Save(s);}var p=service.Preview(path,reports);True(p.Date1904);Equal(new DateOnly(2026,10,14),p.LastDate!.Value);service.Commit(p,[]);Equal(new DateOnly(2026,10,19),service.Preview(path,reports).LastDate!.Value);});
     Check("Empty workbook data can be appended without a prior date",()=>{var path=Fixture("empty");using(var b=new XLWorkbook(path)){b.Worksheet("Details").Row(2).Clear();b.Save();}var p=service.Preview(path,reports);True(p.LastDate is null);service.Commit(p,[]);using var result=new XLWorkbook(path);Equal("yyyy.mm.dd",result.Worksheet("Details").Cell(2,1).Style.NumberFormat.Format);});
 }
 finally

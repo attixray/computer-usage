@@ -57,7 +57,6 @@
 #compusage-cards-preview input[type=radio],#compusage-cards-preview input[type=checkbox]{accent-color:var(--cu-brand);width:17px;height:17px;flex-shrink:0}
 #compusage-cards-preview .cu-check{display:flex;align-items:center;gap:8px}
 #compusage-cards-preview .cu-lunch-actions{margin-top:10px;font-size:.87em}
-#compusage-cards-preview .cu-footer{padding-top:6px;font-size:.76em;color:var(--cu-muted)}
 #compusage-cards-preview .cu-toast{min-height:26px;color:var(--cu-brand);font-size:.86em;margin-top:8px}
 #compusage-cards-preview .cu-copy-fallback{margin:12px 0;padding:12px;background:var(--cu-soft);border-radius:8px}
 #compusage-cards-preview textarea{width:100%;min-height:100px;background:var(--cu-paper);border:1px solid var(--cu-line);border-radius:5px;padding:8px;white-space:pre;font-family:Consolas,monospace;font-size:.8em}

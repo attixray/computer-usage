@@ -36,6 +36,8 @@ public sealed class SecurityEventService
             if (parsed is not null) events.AddRange(SessionEvents.ForUser([parsed], validatedSid, account));
         }
 
+        events.AddRange(ReadSystem(start, end, cancellationToken));
+
         using var oldestReader = new EventLogReader(new EventLogQuery("Security", PathType.LogName));
         using var oldest = oldestReader.ReadEvent();
         DateTimeOffset? oldestTime = oldest?.TimeCreated is { } time ? new DateTimeOffset(time).ToUniversalTime() : null;
@@ -43,6 +45,29 @@ public sealed class SecurityEventService
         var active = identity.User?.Value == validatedSid ? LogonId(identity) : null;
         return new EventReadResult(SessionEvents.DropTransientSignIns(events, active)
             .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray(), oldestTime);
+    }
+
+    private static IReadOnlyList<LockEvent> ReadSystem(string start, string end, CancellationToken cancellationToken)
+    {
+        // Sleep/wake, unexpected shutdowns and orderly shutdowns are machine-wide System-log records.
+        // The System log is readable by ordinary users; without it the Security events still work.
+        var xpath = "*[System[((Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1)"
+            + " or (Provider[@Name='EventLog'] and EventID=6008) or (Provider[@Name='Microsoft-Windows-Kernel-General'] and EventID=13))"
+            + $" and TimeCreated[@SystemTime>='{start}' and @SystemTime<'{end}']]]";
+        var events = new List<LockEvent>();
+        try
+        {
+            using var reader = new EventLogReader(new EventLogQuery("System", PathType.LogName, xpath));
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using var record = reader.ReadEvent();
+                if (record is null) break;
+                events.AddRange(EventXmlParser.ParseSystem(record.ToXml()));
+            }
+        }
+        catch (Exception ex) when (ex is EventLogException or UnauthorizedAccessException) { }
+        return events;
     }
 
     public static string? LogonId(WindowsIdentity identity)

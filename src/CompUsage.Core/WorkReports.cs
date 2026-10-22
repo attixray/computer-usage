@@ -50,10 +50,14 @@ public static class WorkReports
         var firstDate = today.AddDays(1 - settings.HistoryDays);
         var meetingChoices = meetings ?? new Dictionary<string, string>();
         var notes = comments ?? new Dictionary<string, string>();
-        var raw = SessionEvents.ResolveSessions(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
-            .DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId));
-        var originalDays = raw.GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
-        return ActivityHistory.Apply(SessionEvents.WorkTransitions(raw), activity ?? [], settings, zone)
+        var raw = SessionEvents.ResolveSessions(SessionEvents.MergeSleeps(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
+            .DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp))).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId));
+        var transitions = SessionEvents.WorkTransitions(raw);
+        // Every user record stays visible; machine-wide sleeps and shutdowns only when they affected the user's session.
+        var originalDays = raw.Where(e => !e.IsSystemEvent).Concat(transitions.Where(e => e.IsSystemEvent))
+            .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
+            .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
+        return ActivityHistory.Apply(transitions, activity ?? [], settings, zone)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
             .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, meetingChoices, now, zone, gaps ?? []))

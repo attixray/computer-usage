@@ -60,6 +60,11 @@ public sealed class MainWindow : Window
         if (state.Settings.RememberView && state.Maximized) WindowState = WindowState.Maximized;
         Content = view;
         Loaded += async (_, _) => await InitializeAsync();
+        // While the window is active, ask the UI for a silent refresh on activation and once a minute.
+        var autoRefresh = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        autoRefresh.Tick += (_, _) => RequestAutoRefresh();
+        Activated += (_, _) => { RequestAutoRefresh(); autoRefresh.Start(); };
+        Deactivated += (_, _) => autoRefresh.Stop();
         Closing += (_, e) =>
         {
             if (commentsPending)
@@ -122,6 +127,11 @@ public sealed class MainWindow : Window
                 : "A felület nem indítható. Telepítsd a Microsoft Edge WebView2 Runtime-ot, vagy futtasd újra a telepítőt.\n\n") + ex.Message, "CompUsage", MessageBoxButton.OK, MessageBoxImage.Error);
             Close();
         }
+    }
+
+    private void RequestAutoRefresh()
+    {
+        if (!closing) view.CoreWebView2?.PostWebMessageAsJson("{\"command\":\"autoRefresh\"}");
     }
 
     private async void Receive(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -187,7 +197,7 @@ public sealed class MainWindow : Window
                     readAccessRequired = reply.ReadAccessRequired;
                     if (read is not null)
                     {
-                        state.Events = state.Events.Concat(read.Events).DistinctBy(e => (e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ToList();
+                        state.Events = state.Events.Concat(read.Events).DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ToList();
                         state.OldestAvailable = read.OldestAvailable; state.LastRefresh = DateTimeOffset.Now;
                     }
                     RecordLogging(reply.Logging);
@@ -347,7 +357,7 @@ public sealed class MainWindow : Window
     {
         display = new ExcelDisplay(plan.Formats, excelCulture, TimeZoneInfo.Local);
         return new { token, rows = plan.Rows.Select(RowSnapshot), partials = plan.Partials.Select(p => new
-        { row = p.Row, section = RowSnapshot(p.Interval), keepsExistingComment = p.KeepsExistingComment }) };
+        { row = p.Row, section = RowSnapshot(p.Interval), keepsExistingComment = p.KeepsExistingComment, following = p.Following.Select(RowSnapshot), completesRow = p.CompletesRow }) };
     }
 
     private object? ActivityValue(LockEvent? entry)
@@ -370,6 +380,7 @@ public sealed class MainWindow : Window
             incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.WorkTimestamp, true),
             firstFromSession = d.First?.IsSessionTransition ?? false, lastFromSession = d.Last?.IsSessionTransition ?? false,
             firstFromSignIn = d.First?.IsSignInOrOut ?? false, lastFromSignOut = d.Last?.IsSignInOrOut ?? false,
+            firstSystem = d.First?.IsSystemEvent == true ? d.First.Label : null, lastSystem = d.Last?.IsSystemEvent == true ? d.Last.Label : null,
             lastFromActivity = d.Last?.ActivityTimestamp is not null, lastActivity = ActivityValue(d.Last),
             manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.WorkTimestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },
@@ -381,6 +392,7 @@ public sealed class MainWindow : Window
             copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(display.CopyRow)) : "",
             eventCopy = "Dátum\tIdőpont\tEsemény\tAzonosító\r\n" + string.Join("\r\n", d.Events.Select(e => $"{TimeZoneInfo.ConvertTime(e.Timestamp, TimeZoneInfo.Local):yyyy.MM.dd}\t{Presentation.Time(e.Timestamp, TimeZoneInfo.Local, true)}\t{e.Label}\t{e.EventId}")),
             hasSessionEvents = d.Events.Any(e => e.IsSessionTransition), hasSignInEvents = d.Events.Any(e => e.IsSignInOrOut),
+            hasSystemEvents = d.Events.Any(e => e.IsSystemEvent),
             events = d.Events.Select(e => new { time = TimeValue(e.Timestamp, e.IsLock), label = e.Label, eventId = e.EventId, isLock = e.IsLock, activity = ActivityValue(e) })
         })
     };

@@ -35,6 +35,25 @@ public static class SessionEvents
                 ? e with { SessionId = known[0] } : e).ToArray();
     }
 
+    public static IReadOnlyList<LockEvent> MergeSleeps(IEnumerable<LockEvent> events)
+    {
+        // Sleep followed by hibernation is recorded as overlapping low-power periods with the same start.
+        // Merge overlapping periods into one sleep and its final wake.
+        var list = events.ToArray();
+        var periods = list.Where(e => e.EventId == LockEvent.Sleep)
+            .Select(s => (Sleep: s, Wake: list.FirstOrDefault(w => w.EventId == LockEvent.Wake && w.RecordId == s.RecordId)))
+            .Where(p => p.Wake is not null).OrderBy(p => p.Sleep.Timestamp).ThenBy(p => p.Wake!.Timestamp).ToArray();
+        var merged = new List<LockEvent>();
+        for (var i = 0; i < periods.Length;)
+        {
+            var (sleep, wake) = periods[i];
+            for (i++; i < periods.Length && periods[i].Sleep.Timestamp <= wake!.Timestamp.AddSeconds(1); i++)
+                if (periods[i].Wake!.Timestamp > wake.Timestamp) wake = periods[i].Wake;
+            merged.Add(sleep); merged.Add(wake!);
+        }
+        return list.Where(e => e.EventId is not (LockEvent.Sleep or LockEvent.Wake)).Concat(merged).ToArray();
+    }
+
     public static IReadOnlyList<LockEvent> WorkTransitions(IEnumerable<LockEvent> events)
     {
         var list = events.OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
@@ -43,6 +62,25 @@ public static class SessionEvents
         for (var i = 0; i < list.Length; i++)
         {
             var entry = list[i];
+            var previous = result.Count > 0 ? result[^1] : null;
+            if (entry.IsSystemEvent)
+            {
+                // Machine-wide events matter only while the user's session is open (sleep, crash, shutdown),
+                // or for the wake that ends a sleep kept here. They take over that session's identity.
+                if (previous is null || (entry.IsLock ? previous.IsLock : previous.EventId != LockEvent.Sleep)) continue;
+                var adopted = entry with { UserSid = previous.UserSid, UserName = previous.UserName, Domain = previous.Domain,
+                    SessionId = previous.SessionId, LogonId = previous.LogonId };
+                result.Add(adopted); closed[adopted.SessionKey] = adopted.IsLock;
+                continue;
+            }
+            if (previous?.EventId == LockEvent.Wake && previous.SessionKey == entry.SessionKey
+                && (!entry.IsLock || entry.Timestamp - previous.Timestamp <= TimeSpan.FromSeconds(60)))
+            {
+                // The wake showed the lock screen: work restarts at the real unlock, and a lock recorded
+                // while resuming repeats the sleep's end.
+                result.RemoveAt(result.Count - 1); closed[entry.SessionKey] = true;
+                if (entry.IsLock) continue;
+            }
             var duplicate = false;
             if (Rank(entry) > 0 && HasLogon(entry))
             {

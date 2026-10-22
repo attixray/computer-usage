@@ -7,7 +7,7 @@ const {parseHTML} = require('linkedom');
   const {window} = parseHTML('<html><body><div id="compusage-cards-preview"></div></body></html>');
   const document = window.document;
   // LinkeDOM models the DOM without launching a browser or interacting with the real clipboard.
-  let receive, clipboard = '', writes = 0, calls = [], meetingUndo=null, failComment=false;
+  let receive, clipboard = '', writes = 0, calls = [], meetingUndo=null, failComment=false, previewPartials=[];
   const time = (display, exact) => ({display,exact,date:'2026.10.16'});
   let state = {settings:{dayStart:'04:00:00',expectedLunch:'11:30:00',minimumLunchMinutes:15,splitBreakMinutes:10,ignoreDailyMeeting:false,meetingStartFrom:'09:25:00',meetingStartUntil:'09:40:00',maximumMeetingMinutes:20,historyDays:60,workbookPath:'C:\\test\\work.xlsx',fontScale:1.15,rememberView:true,language:'hu',theme:'auto',lockTimeSource:'lock'},logging:true,permissions:{readAccessRequired:false},activity:{enabled:false,running:false,registered:true},user:'Test',expanded:[],scroll:0,refreshed:'2026.10.19 14:00:00',oldest:null,workbook:{available:true,lastDate:'2026.10.15',days:1,rows:2,partials:0},days:[{key:'2026-10-16',date:'2026.10.16',weekday:'péntek',status:'Lezárt',ongoing:false,incomplete:false,issues:[],first:time('8:02','08:02:14'),last:time('16:48','16:48:09'),manual:false,none:false,undo:false,lunch:{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19},pairs:[{id:'short',from:time('10:16','10:16:03'),to:time('10:20','10:20:09'),minutes:4},{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19}],sections:[{date:'2026.10.16',from:time('8:02','08:02:14'),to:time('11:32','11:32:05'),duration:'03:30',open:false,copy:'2026.10.16\t08:02:14\t11:32:05'},{date:'2026.10.16',from:time('11:51','11:51:34'),to:time('16:48','16:48:09'),duration:'04:57',open:false,copy:'2026.10.16\t11:51:34\t16:48:09'}],copy:'2026.10.16\t08:02:14\t11:32:05\r\n2026.10.16\t11:51:34\t16:48:09',eventCopy:'events',events:[]}]};
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -23,7 +23,7 @@ const {parseHTML} = require('linkedom');
     day.copy=day.sections.map(s=>s.copy).join('\r\n');
   }
 
-  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'commentsPending':case 'commentsFailed':break;case 'sectionComment':{if(failComment)throw Error('Comment save failed');const row=state.days.flatMap(d=>d.sections).find(s=>s.id===message.data.sectionId);row.comment=message.data.comment;break;}case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:[]};break;case 'commit':writes++;result={state:clone(state),backup:'C:\\test\\backup.xlsx'};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'meeting':{
+  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'commentsPending':case 'commentsFailed':break;case 'sectionComment':{if(failComment)throw Error('Comment save failed');const row=state.days.flatMap(d=>d.sections).find(s=>s.id===message.data.sectionId);row.comment=message.data.comment;break;}case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:clone(previewPartials)};break;case 'commit':writes++;result={state:clone(state),backup:'C:\\test\\backup.xlsx'};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'meeting':{
       const day=state.days[0];meetingUndo=clone(day);day.manualMeeting=message.data.value!==null;day.noMeeting=message.data.value==='none';
       const pair=message.data.value===null?day.pairs[0]:day.pairs.find(p=>p.id===message.data.value);
       day.meeting=pair?{id:pair.id,from:clone(pair.from),to:clone(pair.to),minutes:pair.minutes}:null;
@@ -137,7 +137,13 @@ const {parseHTML} = require('linkedom');
     assert.equal(status.parentElement.className,'cu-comment-actions');
     assert.equal(status.previousElementSibling.getAttribute('data-comment-copy'),'2026-10-16|0');
     assert.equal(status.parentElement.parentElement.querySelector('textarea').getAttribute('data-section-comment'),'2026-10-16|0');
-    details.open=true;details.dispatchEvent(new window.Event('toggle',{bubbles:true}));await click('[data-refresh]');assert.equal(node('[data-section-details]').hasAttribute('open'),true);
+    assert.equal(details.hasAttribute('open'),true);assert.equal(node('[data-pair-details]').hasAttribute('open'),false);
+    assert.match(node('[data-pair-details] summary').textContent,/Lock \/ unlock pairs \(\d+\)/);
+    details.open=false;details.dispatchEvent(new window.Event('toggle',{bubbles:true}));await click('[data-refresh]');assert.equal(node('[data-section-details]').hasAttribute('open'),false);
+    const pairs=node('[data-pair-details]');pairs.open=true;pairs.dispatchEvent(new window.Event('toggle',{bubbles:true}));
+    const restore=node('[data-section-details]');restore.open=true;restore.dispatchEvent(new window.Event('toggle',{bubbles:true}));
+    await click('[data-refresh]');assert.equal(node('[data-section-details]').hasAttribute('open'),true);assert.equal(node('[data-pair-details]').hasAttribute('open'),true);
+    assert.equal(document.querySelector('.cu-footer'),null);
     await click('[data-section-copy="2026-10-16|0"]');assert.equal(clipboard,'2026.10.16\t08:02:14\t11:32:05');
     await click('[data-copy="3:29:51"]');assert.equal(clipboard,'3:29:51');state.days[0].sections[1].open=false;
   });
@@ -189,6 +195,38 @@ const {parseHTML} = require('linkedom');
     assert.match(document.body.textContent,/Sign-in/);assert.match(document.body.textContent,/the new session continues the same day/);
     state.settings.language='hu';await click('[data-refresh]');
     assert.match(document.body.textContent,/Első bejelentkezés/);assert.match(document.body.textContent,/Kijelentkezés \/ leállítás/);
+  });
+  await check('Details append is disabled with a reason when no closed day can be appended',async()=>{
+    const original={...state.workbook};state.workbook={...original,days:0,rows:0,partials:0};await click('[data-refresh]');
+    assert.equal(node('[data-append]').disabled,true);assert.match(node('[data-append-empty]').textContent,/Nincs hozzáfűzhető lezárt nap/);
+    state.workbook=original;await click('[data-refresh]');assert.equal(node('[data-append]').disabled,false);assert.equal(document.querySelector('[data-append-empty]'),null);
+  });
+  await check('A partial preview shows the open section and the following rows of the day',async()=>{
+    const section=state.days[0].sections[0];
+    previewPartials=[{row:2,keepsExistingComment:false,section:{...section,open:false},following:[{...section,id:'f1',open:true}]}];
+    await click('[data-append]');const text=node('[data-import]').textContent;
+    assert.match(text,/Utána új sorként/);assert.equal(document.querySelectorAll('[data-partial-following]').length,1);assert.match(text,/üresen marad \(folyamatban\)/);
+    assert.match(text,/legfeljebb 3 perccel/);previewPartials=[];await click('[data-close-plan]');
+  });
+  await check('Activation and the minute timer refresh silently, never over an open preview, and are throttled',async()=>{
+    const refreshes=()=>calls.filter(c=>c.command==='refresh').length;
+    await click('[data-append]');const before=refreshes();
+    receive({data:{command:'autoRefresh'}});await flush();assert.equal(refreshes(),before);
+    await click('[data-close-plan]');const toast=node('[data-toast]');toast.hidden=true;
+    receive({data:{command:'autoRefresh'}});await flush();await flush();
+    assert.equal(refreshes(),before+1);assert.equal(toast.hidden,true);
+    receive({data:{command:'autoRefresh'}});await flush();assert.equal(refreshes(),before+1);
+  });
+  await check('Sleep and unexpected-shutdown endpoints use the system event labels',async()=>{
+    const day=state.days[0];day.hasSignInEvents=false;day.hasSystemEvents=true;day.firstFromSignIn=false;day.lastFromSignOut=false;
+    day.firstSystem='Ébredés';day.lastSystem='Váratlan leállás (becsült)';
+    day.events=[{time:time('8:10','08:10:04'),eventId:1,label:'Ébredés',isLock:false},
+      {time:time('15:31','15:31:19'),eventId:6008,label:'Váratlan leállás (becsült)',isLock:true}];
+    state.settings.language='en';await click('[data-refresh]');
+    assert.match(document.body.textContent,/Wake/);assert.match(document.body.textContent,/Unexpected shutdown \(estimated\)/);
+    assert.match(document.body.textContent,/its time is estimated/);
+    state.settings.language='hu';await click('[data-refresh]');
+    assert.match(document.body.textContent,/Váratlan leállás \(becsült\)/);
   });
   console.log(`${count} DOM/bridge checks passed (no browser, native clipboard, log, or user workbook access).`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -5,7 +5,14 @@ using System.Xml.Linq;
 
 namespace CompUsage.Core;
 
-public sealed record PartialRow(int Row, WorkInterval Interval, bool KeepsExistingComment = false);
+public sealed record PartialRow(int Row, WorkInterval Interval, bool KeepsExistingComment = false)
+{
+    // Later sections of the same day, appended right after a completed last row.
+    public IReadOnlyList<WorkInterval> Following { get; init; } = [];
+    // False when the row is already complete: Interval is then the first appended section, not a completion.
+    public bool CompletesRow { get; init; } = true;
+    public IEnumerable<WorkInterval> Appended => CompletesRow ? Following : Following.Prepend(Interval);
+}
 public sealed record WorkbookPlan(string Path, string Fingerprint, DateOnly? LastDate,
     IReadOnlyList<WorkInterval> Rows, IReadOnlyList<PartialRow> Partials, int LastRow, bool Date1904, WorkbookFormats Formats);
 
@@ -15,6 +22,7 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
     private static readonly XNamespace Ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
     private static readonly XNamespace Rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
+    public static readonly TimeSpan PartialStartTolerance = TimeSpan.FromMinutes(3);
 
     public WorkbookPlan Preview(string path, IReadOnlyList<WorkReport> days)
     {
@@ -31,28 +39,37 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         var lastRow = SheetRows(sheet).Where(r => r.Elements(Ns + "c").Any(c => Column(c) is "A" or "B" or "C" or "F"
             && !string.IsNullOrWhiteSpace(Text(c, strings)))).Select(RowNumber).DefaultIfEmpty(1).Max();
         var formats = ReadFormats(sheet, ReadXml(zip, "xl/styles.xml"), lastRow);
-        var rows = days.Where(d => !d.Ongoing && !d.Incomplete && (lastDate is null || d.Date > lastDate))
+        // Today's ongoing day is included too; its open section is written without an end (see Commit).
+        var rows = days.Where(d => !d.Incomplete && (lastDate is null || d.Date > lastDate))
             .OrderBy(d => d.Date).SelectMany(d => d.Sections).ToArray();
         var partials = new List<PartialRow>();
         foreach (var (row, date) in dated.Where(r => r.Date == lastDate))
         {
-            if (!string.IsNullOrWhiteSpace(Text(Cell(row, "C"), strings))) continue;
+            var sections = days.Where(d => d.Date == date && !d.Incomplete).SelectMany(d => d.Sections).OrderBy(s => s.From).ToArray();
             var from = ReadTime(Cell(row, "B"), strings);
-            if (from is null) continue;
-            var candidates = days.Where(d => d.Date == date && !d.Ongoing && !d.Incomplete).SelectMany(d => d.Sections)
-                .Where(s => Math.Abs((TimeZoneInfo.ConvertTime(s.From, zone).TimeOfDay - from.Value).TotalSeconds) < 1
-                    || TimeZoneInfo.ConvertTime(s.From, zone).TimeOfDay.Ticks / TimeSpan.TicksPerMinute == from.Value.Ticks / TimeSpan.TicksPerMinute
-                       && Math.Abs(from.Value.TotalSeconds % 60) < 0.001
-                    || Math.Abs((TimeZoneInfo.ConvertTime(Presentation.RoundMinute(s.From), zone).TimeOfDay - from.Value).TotalMilliseconds) < 1).ToArray();
-            if (candidates.Length == 1)
+            if (!string.IsNullOrWhiteSpace(Text(Cell(row, "C"), strings)))
             {
-                var candidate = candidates[0];
+                // A complete last row, for example written during a break, continues with the day's later sections.
+                if (RowNumber(row) != lastRow || from is null || ReadTime(Cell(row, "C"), strings) is not { } to || to <= from) continue;
+                var later = sections.Where(s => TimeZoneInfo.ConvertTime(s.From, zone).TimeOfDay > to).ToArray();
+                if (later.Length > 0) partials.Add(new(RowNumber(row), later[0]) { CompletesRow = false, Following = later[1..] });
+                continue;
+            }
+            if (from is null) continue;
+            // A manually typed start matches the closest recorded section start within three minutes, including
+            // today's ongoing day. A still-open section has no end to complete yet.
+            var candidate = sections.Select(s => (Section: s, Distance: Math.Abs((TimeZoneInfo.ConvertTime(s.From, zone).TimeOfDay - from.Value).Ticks)))
+                .Where(c => c.Distance <= PartialStartTolerance.Ticks).OrderBy(c => c.Distance).Select(c => c.Section).FirstOrDefault();
+            if (candidate is { Open: false })
+            {
                 var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(candidate.From, zone).DateTime);
                 var existingFrom = WorkDayClock.At(localDate, TimeOnly.FromTimeSpan(from.Value), zone);
                 var existingComment = Text(Cell(row,"F"), strings);
                 var keepComment = !string.IsNullOrEmpty(existingComment) || Cell(row,"F")?.Element(Ns + "f") is not null;
+                // Later sections can follow only when the completed row is the sheet's last row.
+                var following = RowNumber(row) == lastRow ? sections.Where(s => s.From > candidate.From).ToArray() : [];
                 if (existingFrom < candidate.To) partials.Add(new(RowNumber(row), candidate with
-                { From = existingFrom, Comment = keepComment ? existingComment : candidate.Comment }, keepComment));
+                { From = existingFrom, Comment = keepComment ? existingComment : candidate.Comment }, keepComment) { Following = following });
             }
         }
         return new(Path.GetFullPath(path), Convert.ToHexString(SHA256.HashData(bytes)), lastDate, rows, partials, lastRow, date1904, formats);
@@ -85,7 +102,9 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                 var formats = new Dictionary<(int, string), int>();
                 var template = SheetRows(sheet).LastOrDefault(r => RowNumber(r) <= plan.LastRow && RowNumber(r) > 1);
                 var next = plan.LastRow;
-                foreach (var interval in plan.Rows)
+                // A completed partial row's later sections belong to the last date, before any newer day.
+                var appended = plan.Partials.Where(p => selectedPartials.Contains(p.Row)).SelectMany(p => p.Appended).Concat(plan.Rows);
+                foreach (var interval in appended)
                 {
                     var index = ++next;
                     var row = data.Elements(Ns + "row").FirstOrDefault(r => RowNumber(r) == index);
@@ -97,13 +116,17 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                     }
                     Set(row, "A", index, ExcelDate(interval.Date, plan.Date1904), template);
                     Set(row, "B", index, LocalFraction(interval.From), template);
-                    Set(row, "C", index, LocalFraction(interval.To), template);
-                    Set(row, "D", index, interval.Duration.TotalDays, template);
-                    Set(row, "E", index, interval.Duration.TotalHours, template);
+                    // A still-open section keeps To and the durations blank, so a later append completes it as a started row.
+                    if (!interval.Open)
+                    {
+                        Set(row, "C", index, LocalFraction(interval.To), template);
+                        Set(row, "D", index, interval.Duration.TotalDays, template);
+                        Set(row, "E", index, interval.Duration.TotalHours, template);
+                    }
                     if (interval.Comment.Length > 0) SetText(row, "F", index, interval.Comment, template);
                     FormatRow(row, sheet, styles, formats, false, plan.Formats);
                 }
-                foreach (var partial in plan.Partials.Where(p => selectedPartials.Contains(p.Row)))
+                foreach (var partial in plan.Partials.Where(p => p.CompletesRow && selectedPartials.Contains(p.Row)))
                 {
                     var row = data.Elements(Ns + "row").Single(r => RowNumber(r) == partial.Row);
                     Set(row, "C", partial.Row, LocalFraction(partial.Interval.To), template);
@@ -141,11 +164,30 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                     WriteXml(zip, "[Content_Types].xml", types);
                 }
             }
-            // Atomic replacement on Windows. Unsupported shares fail rather than using an unsafe overwrite.
-            File.Replace(temp, plan.Path, backup);
+            // Atomic replacement on Windows. Some SMB servers deny it even with full control; fall back to
+            // a verified backup copy and a same-directory rename that replaces the original in one step.
+            try { File.Replace(temp, plan.Path, backup); }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { ReplaceByRename(temp, plan.Path, backup, plan.Fingerprint); }
             return backup;
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
+
+    public static void ReplaceByRename(string replacement, string path, string backup, string fingerprint)
+    {
+        if (File.Exists(path))
+        {
+            using var original = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var memory = new MemoryStream();
+            original.CopyTo(memory);
+            if (Convert.ToHexString(SHA256.HashData(memory.ToArray())) != fingerprint)
+                throw new IOException("Az Excel-fájl az előnézet óta megváltozott. Kérj új előnézetet.");
+            using var copy = new FileStream(backup, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            memory.Position = 0; memory.CopyTo(copy); copy.Flush(true);
+        }
+        // A failed ReplaceFile can already have moved the original to the backup name; then only the rename remains.
+        else if (!File.Exists(backup)) throw new FileNotFoundException("Az Excel-fájl nem található.", path);
+        File.Move(replacement, path, true);
     }
 
     private double LocalFraction(DateTimeOffset value) => TimeZoneInfo.ConvertTime(value, zone).TimeOfDay.TotalDays;
