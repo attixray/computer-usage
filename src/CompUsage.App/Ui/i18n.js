@@ -113,6 +113,7 @@ window.i18n = (() => {
     'Nincs aktivitási adat · zárolás alapján':'No activity data · using lock time',
     'Háttérfigyelő kikapcsolva':'Activity monitor disabled','Háttérfigyelő működik':'Activity monitor running',
     'Háttérfigyelő nem válaszol':'Activity monitor is not responding','Újraindítás':'Restart',
+    'A háttérfigyelő nem indult újra. Próbáld újra később.':'The activity monitor did not restart. Try again later.',
     'Munkaszakaszok: utolsó aktivitás, adat hiányában zárolás':'Work sections: last input, falling back to lock time',
     'Munkaszakaszok: zárolási időpontok':'Work sections: lock times',
     'Háttérfigyelő engedélyezése':'Enable background activity monitor',

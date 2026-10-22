@@ -223,6 +223,21 @@ const {parseHTML} = require('linkedom');
     assert.equal(refreshes(),before+1);assert.equal(toast.hidden,true);
     receive({data:{command:'autoRefresh'}});await flush();assert.equal(refreshes(),before+1);
   });
+  await check('An automatic refresh answer that arrives after editing started is dropped',async()=>{
+    // app.js runs in its own context, so the throttle clock is moved there.
+    const clock=vm.runInContext('Date',context);const realNow=clock.now;let fake=realNow()+60000;clock.now=()=>fake;
+    try{
+      const post=window.chrome.webview.postMessage;let hold;
+      window.chrome.webview.postMessage=function(message){if(message.command==='refresh'){calls.push(message);hold=()=>receive({data:{id:message.id,ok:true,result:clone(state)}});return;}return post.call(this,message);};
+      receive({data:{command:'autoRefresh'}});await flush();assert.ok(hold);
+      const rendered=document.querySelector('[data-day]');rendered.dispatchEvent(new window.Event('input',{bubbles:true}));
+      hold();await flush();await flush();
+      assert.equal(document.querySelector('[data-day]'),rendered);
+      fake+=60000;hold=null;receive({data:{command:'autoRefresh'}});await flush();hold();await flush();await flush();
+      assert.notEqual(document.querySelector('[data-day]'),rendered);
+      window.chrome.webview.postMessage=post;
+    }finally{clock.now=realNow;}
+  });
   await check('Sleep and unexpected-shutdown endpoints use the system event labels',async()=>{
     const day=state.days[0];day.hasSignInEvents=false;day.hasSystemEvents=true;day.firstFromSignIn=false;day.lastFromSignOut=false;
     day.firstSystem='Ébredés';day.lastSystem='Váratlan leállás (becsült)';

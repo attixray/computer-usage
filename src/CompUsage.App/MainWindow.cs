@@ -279,7 +279,7 @@ public sealed class MainWindow : Window
                 await broker.RequestAsync("grantRead");
                 return await DispatchAsync("refresh", default);
             case "startActivity":
-                await ActivityMonitor.StartAndWaitAsync(); ReadActivity(); return Snapshot();
+                await ActivityMonitor.StartAndWaitAsync(restart: true); ReadActivity(); return Snapshot();
             case "history":
                 var history = data.GetProperty("days").GetInt32();
                 if (history is not (7 or 30 or 60)) throw new ArgumentException("Érvénytelen időtartam.");

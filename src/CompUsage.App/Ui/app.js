@@ -5,7 +5,7 @@
   const pending = new Map(), commentDrafts = new Map(), closedSections = new Set(), pairDetails = new Set();
   let savingComments = null;
   let sequence = 0, state, expanded = new Set(), draft = null, tab = 'time', plan = null, page = 'log';
-  let toastTimer, scrollTimer, busy = false, started = false, autoRun = null, lastAutoRefresh = 0;
+  let toastTimer, scrollTimer, busy = false, started = false, autoRun = null, lastAutoRefresh = 0, edits = 0;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
   const field = (value, label) => `<input type="text" class="cu-value" readonly value="${esc(value)}" aria-label="${esc(label)}" style="width:${String(value).length + .05}ch">`;
@@ -42,13 +42,17 @@
     const target = root.querySelector('[data-dialog-error]') || root.querySelector('[data-error]');
     target.hidden = false; target.textContent = window.i18n.text(message,state?.settings.language || 'hu');
   }
+  function quiet() {
+    const active=document.activeElement;
+    return !(busy||draft||plan||commentDrafts.size||savingComments||(active&&active.matches('textarea,input,select'))
+      ||String(window.getSelection?.()||'').length);
+  }
   function autoRefresh() {
     // Silent background refresh: it never interrupts editing, dialogs, previews, a selection or another operation.
-    const active=document.activeElement;
-    if(busy||autoRun||draft||plan||commentDrafts.size||savingComments||(active&&active.matches('textarea,input,select'))
-      ||String(window.getSelection?.()||'').length||Date.now()-lastAutoRefresh<15000)return;
-    lastAutoRefresh=Date.now();
-    autoRun=rpc('refresh').then(result=>{if(!busy&&!draft&&!plan){state=result;render();}}).catch(()=>{}).finally(()=>{autoRun=null;});
+    // The answer is dropped when any of these started, or an input changed, while it was on its way.
+    if(autoRun||!quiet()||Date.now()-lastAutoRefresh<15000)return;
+    lastAutoRefresh=Date.now();const startEdits=edits;
+    autoRun=rpc('refresh').then(result=>{if(edits===startEdits&&quiet()){state=result;render();}}).catch(()=>{}).finally(()=>{autoRun=null;});
   }
   async function perform(action, success = '') {
     if (busy) return;
@@ -203,7 +207,7 @@
   root.addEventListener('toggle',e=>{const t=e.target;
     if(t.matches('[data-section-details]')){t.open?closedSections.delete(t.dataset.sectionDetails):closedSections.add(t.dataset.sectionDetails);}
     if(t.matches('[data-pair-details]')){t.open?pairDetails.add(t.dataset.pairDetails):pairDetails.delete(t.dataset.pairDetails);}},true);
-  root.addEventListener('input',e=>{const t=e.target;
+  root.addEventListener('input',e=>{const t=e.target;edits++;
     if(t.matches('[data-section-comment]')){
       const s=findSection(t.dataset.sectionComment);if(!s)return;
       s.comment=t.value;commentDrafts.set(s.id,t.value);

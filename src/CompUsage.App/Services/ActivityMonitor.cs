@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -25,7 +26,7 @@ public static class ActivityMonitor
 
     private static (DateTime Stamp, SharedState? Value) savedState;
 
-    // The monitor only reads the app's settings and day choices; the UI stays the only writer of state.json.
+    // The monitor only reads the app's settings, day choices and logging gaps; the UI stays the only writer of state.json.
     public static SharedState SavedState()
     {
         try
@@ -49,15 +50,41 @@ public static class ActivityMonitor
         Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { ArgumentList = { "--activity-monitor" }, UseShellExecute = false, CreateNoWindow = true });
     }
 
-    public static async Task StartAndWaitAsync()
+    public static bool Healthy(ActivitySession state, DateTimeOffset now) =>
+        state.StoppedAt is null && now - state.HeartbeatAt < TimeSpan.FromSeconds(20);
+
+    // A restart first ends a monitor that still holds its mutex but stopped beating, and reports a monitor that does not come up.
+    public static async Task StartAndWaitAsync(bool restart = false)
     {
+        if (restart && IsRunning() && !Healthy(Journal.Load(SessionId), DateTimeOffset.UtcNow)) await Task.Run(EndStuck);
         Start();
         for (var attempt = 0; attempt < 30 && Wanted(); attempt++)
         {
-            var state = Journal.Load(SessionId);
-            if (IsRunning() && state.StoppedAt is null && DateTimeOffset.UtcNow - state.HeartbeatAt < TimeSpan.FromSeconds(20)) return;
+            if (IsRunning() && Healthy(Journal.Load(SessionId), DateTimeOffset.UtcNow)) return;
             await Task.Delay(100);
         }
+        if (restart && Wanted()) throw new InvalidOperationException("A háttérfigyelő nem indult újra. Próbáld újra később.");
+    }
+
+    // A hung dispatcher never polls the stop signal, so after a short wait the recorded process is ended.
+    private static void EndStuck()
+    {
+        if (Stop(wait: TimeSpan.FromSeconds(3)) == 0 || Journal.Load(SessionId).ProcessId is not { } id) return;
+        if (EndMonitorProcess(id)) for (var wait = Stopwatch.StartNew(); IsRunning() && wait.Elapsed < TimeSpan.FromSeconds(3);) Thread.Sleep(50);
+    }
+
+    // Only a CompUsage process in this session is ended, so a reused process id never stops an unrelated program.
+    public static bool EndMonitorProcess(int id)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(id);
+            if (process.Id == Environment.ProcessId || process.SessionId != Process.GetCurrentProcess().SessionId
+                || !string.Equals(process.MainModule?.FileName, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase)) return false;
+            process.Kill();
+            return process.WaitForExit(5000);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception) { return false; }
     }
 
     public static bool RegisteredAtLogon()
@@ -66,13 +93,13 @@ public static class ActivityMonitor
         return key?.GetValue("CompUsageActivity") is string value && value.Contains("--activity-monitor", StringComparison.Ordinal);
     }
 
-    public static int Stop(string? testDirectory = null)
+    public static int Stop(string? testDirectory = null, TimeSpan? wait = null)
     {
         if (!IsRunning(testDirectory)) return 0;
         try { using var stop = EventWaitHandle.OpenExisting(StopName(testDirectory)); stop.Set(); }
         catch (WaitHandleCannotBeOpenedException) { return 5; }
         var deadline = Stopwatch.StartNew();
-        while (deadline.Elapsed < TimeSpan.FromSeconds(12))
+        while (deadline.Elapsed < (wait ?? TimeSpan.FromSeconds(12)))
         {
             if (!IsRunning(testDirectory)) return 0;
             Thread.Sleep(50);
@@ -192,7 +219,7 @@ public static class ActivityMonitor
             var since = previous is null || previous.HeartbeatAt == default ? null : previous.LockedAt
                 ?? (previous.StoppedAt is null ? previous.HeartbeatAt : previous.SessionEnded ? previous.StoppedAt : null);
             state = journal.Load(session);
-            state.StartedAt = DateTimeOffset.UtcNow; state.StoppedAt = null; state.LastInputAt = null; state.LockedAt = null; state.SessionEnded = false;
+            state.StartedAt = DateTimeOffset.UtcNow; state.ProcessId = Environment.ProcessId; state.StoppedAt = null; state.LastInputAt = null; state.LockedAt = null; state.SessionEnded = false;
             window = new HwndSource(new HwndSourceParameters(title) { Width = 0, Height = 0, WindowStyle = 0 });
             window.AddHook(Messages);
             var id = int.Parse(session, CultureInfo.InvariantCulture);
@@ -374,7 +401,7 @@ public static class ActivityMonitor
         }
 
         private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
-            WorkReports.Build(events, shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, null, state.Locks,
+            WorkReports.Build(events, shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
                 shared.Meetings, null, state.Breaks, shared.BreakReasons)
             .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));
 

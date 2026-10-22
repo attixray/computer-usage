@@ -26,7 +26,7 @@ public sealed class LocalState
 }
 
 public sealed record SharedState(AppSettings Settings, IReadOnlyDictionary<string, string> Lunches,
-    IReadOnlyDictionary<string, string> Meetings, IReadOnlyDictionary<string, string> BreakReasons);
+    IReadOnlyDictionary<string, string> Meetings, IReadOnlyDictionary<string, string> BreakReasons, IReadOnlyList<LoggingGap>? Gaps = null);
 
 public sealed class LocalStore
 {
@@ -50,24 +50,26 @@ public sealed class LocalStore
             throw new InvalidDataException($"Nem olvasható a beállításfájl: {path}. Az eredeti fájl megmaradt.", ex);
         }
     }
-    // Other processes read only the settings and the day choices, and must never block the UI's replace of the file.
-    public static SharedState ReadShared()
+    // Other processes read only the settings, the day choices and the logging gaps, and must never block the UI's replace of the file.
+    public static SharedState ReadShared(string? file = null)
     {
-        if (!File.Exists(FilePath)) return new(new(), new Dictionary<string, string>(), new Dictionary<string, string>(), new Dictionary<string, string>());
+        file ??= FilePath;
+        if (!File.Exists(file)) return new(new(), new Dictionary<string, string>(), new Dictionary<string, string>(), new Dictionary<string, string>());
         try
         {
-            using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var document = JsonDocument.Parse(stream);
             T Part<T>(string name) where T : new() =>
                 document.RootElement.TryGetProperty(name, out var value) ? value.Deserialize<T>(Json) ?? new() : new();
             var settings = Part<AppSettings>(nameof(LocalState.Settings));
             settings.Validate();
             return new(settings, Part<Dictionary<string, string>>(nameof(LocalState.Lunches)),
-                Part<Dictionary<string, string>>(nameof(LocalState.Meetings)), Part<Dictionary<string, string>>(nameof(LocalState.BreakReasons)));
+                Part<Dictionary<string, string>>(nameof(LocalState.Meetings)), Part<Dictionary<string, string>>(nameof(LocalState.BreakReasons)),
+                Part<List<LoggingGap>>(nameof(LocalState.Gaps)));
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
-            throw new InvalidDataException($"Nem olvasható a beállításfájl: {FilePath}.", ex);
+            throw new InvalidDataException($"Nem olvasható a beállításfájl: {file}.", ex);
         }
     }
     public void Save(LocalState state)

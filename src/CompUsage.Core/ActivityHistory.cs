@@ -9,6 +9,8 @@ public sealed class ActivitySession
 {
     public string SessionId { get; set; } = "";
     public DateTimeOffset StartedAt { get; set; }
+    // The monitor's own process, so a restart can end it when it hangs and no longer sees the stop signal.
+    public int? ProcessId { get; set; }
     public DateTimeOffset HeartbeatAt { get; set; }
     public DateTimeOffset? StoppedAt { get; set; }
     public DateTimeOffset? LastInputAt { get; set; }

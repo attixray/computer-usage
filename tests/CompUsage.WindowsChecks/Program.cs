@@ -1,3 +1,4 @@
+using System.IO;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.AccessControl;
@@ -38,6 +39,30 @@ internal static class Program
                 loaded.SectionComments["2026-10-16|123"]="Árvíztűrő\nReview";
                 var comments=System.Text.Json.JsonSerializer.Deserialize<LocalState>(System.Text.Json.JsonSerializer.Serialize(loaded))!;
                 Require(comments.SectionComments["2026-10-16|123"]=="Árvíztűrő\nReview");
+            });
+            Check("The background monitor's shared state carries the logging gaps, so its daily goal sees the same incomplete day", () =>
+            {
+                var file=Path.Combine(Path.GetTempPath(),"CompUsage-shared-"+Guid.NewGuid().ToString("N")+".json");
+                try
+                {
+                    var saved=new LocalState();var from=new DateTimeOffset(2026,10,19,10,0,0,TimeSpan.FromHours(2));
+                    saved.Gaps.Add(new(from,from.AddHours(1)));saved.Gaps.Add(new(from.AddHours(3),null));
+                    File.WriteAllText(file,System.Text.Json.JsonSerializer.Serialize(saved));
+                    var shared=LocalStore.ReadShared(file);
+                    Require(shared.Gaps is [var closed,var open] && closed.From==from && closed.To==from.AddHours(1) && open.To is null);
+                    Require(LocalStore.ReadShared(file+".missing").Gaps is null or { Count: 0 });
+                }
+                finally { File.Delete(file); }
+            });
+            Check("A restart treats a monitor without a fresh heartbeat as stuck and never ends a foreign process", () =>
+            {
+                var now=DateTimeOffset.UtcNow;
+                Require(ActivityMonitor.Healthy(new() { HeartbeatAt=now.AddSeconds(-5) },now));
+                Require(!ActivityMonitor.Healthy(new() { HeartbeatAt=now.AddMinutes(-2) },now));
+                Require(!ActivityMonitor.Healthy(new() { HeartbeatAt=now, StoppedAt=now },now));
+                using var foreign=Process.Start(new ProcessStartInfo("ping.exe","-n 30 127.0.0.1") { UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true })!;
+                try { Require(!ActivityMonitor.EndMonitorProcess(foreign.Id) && !foreign.HasExited); Require(!ActivityMonitor.EndMonitorProcess(Environment.ProcessId)); }
+                finally { foreign.Kill(); foreign.WaitForExit(); }
             });
             Check("A second launch queues activation during startup and can activate the existing instance repeatedly", () =>
             {

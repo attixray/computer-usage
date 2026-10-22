@@ -49,9 +49,13 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
             var from = ReadTime(Cell(row, "B"), strings);
             if (!string.IsNullOrWhiteSpace(Text(Cell(row, "C"), strings)))
             {
-                // A complete last row, for example written during a break, continues with the day's later sections.
-                if (RowNumber(row) != lastRow || from is null || ReadTime(Cell(row, "C"), strings) is not { } to || to <= from) continue;
-                var later = sections.Where(s => TimeZoneInfo.ConvertTime(s.From, zone).TimeOfDay > to).ToArray();
+                // A complete last row, for example written during a break, continues with the day's later work: whole later
+                // sections, and the rest of a section that has since grown past the written end (a short break merged it).
+                if (RowNumber(row) != lastRow || from is null || ReadTime(Cell(row, "C"), strings) is not { } to
+                    || !Clock(from.Value) || !Clock(to) || sections.Length == 0) continue;
+                var (_, end) = RowSpan(date!.Value, from.Value, to, sections);
+                var later = sections.Where(s => s.From >= end || (s.Open ? s.To > end : s.To - end > PartialStartTolerance))
+                    .Select(s => s.From < end ? s with { From = end } : s).ToArray();
                 if (later.Length > 0) partials.Add(new(RowNumber(row), later[0]) { CompletesRow = false, Following = later[1..] });
                 continue;
             }
@@ -237,6 +241,16 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         if (double.TryParse(text, NumberStyles.Float, Invariant, out var number) && number > 0 && number < 2957000)
             return DateOnly.FromDateTime(DateTime.FromOADate(number + (mode1904 ? 1462 : 0)));
         return DateOnly.TryParseExact(text.Trim(), ["yyyy.MM.dd", "yyyy.MM.dd.", "yyyy-MM-dd"], Invariant, DateTimeStyles.None, out var date) ? date : null;
+    }
+    // A row's From/To are clock times on its work date. A start after midnight belongs to the next calendar day when
+    // that still falls within the day's recorded work, and an end not after the start crosses midnight.
+    private static bool Clock(TimeSpan time) => time >= TimeSpan.Zero && time < TimeSpan.FromDays(1);
+    private (DateTimeOffset From, DateTimeOffset To) RowSpan(DateOnly date, TimeSpan from, TimeSpan to, IReadOnlyList<WorkInterval> sections)
+    {
+        var start = WorkDayClock.At(date, TimeOnly.FromTimeSpan(from), zone);
+        if (start < sections[0].From - PartialStartTolerance && start.AddDays(1) <= sections[^1].To) start = start.AddDays(1);
+        var end = WorkDayClock.At(DateOnly.FromDateTime(start.DateTime), TimeOnly.FromTimeSpan(to), zone);
+        return (start, end <= start ? WorkDayClock.At(DateOnly.FromDateTime(start.DateTime).AddDays(1), TimeOnly.FromTimeSpan(to), zone) : end);
     }
     private static TimeSpan? ReadTime(XElement? cell, string[] strings)
     {
