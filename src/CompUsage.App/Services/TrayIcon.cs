@@ -6,17 +6,21 @@ namespace CompUsage.App.Services;
 // A notification-area icon on an existing window, without pulling Windows Forms into the WPF app.
 public sealed class TrayIcon : IDisposable
 {
-    private const int CallbackMessage = 0x8000 + 0x43, OpenCommand = 1, ExitCommand = 2;
+    private const int CallbackMessage = 0x8000 + 0x43, OpenCommand = 1, ExitCommand = 2, FirstEntry = 100;
     private readonly HwndSource source;
     private readonly Func<(string Tip, string Open, string Exit)> labels;
     private readonly Action open, exit;
+    private readonly Func<IReadOnlyList<(string Text, Action? Run)>>? entries;
+    private string? tip;
     private readonly int taskbarCreated = RegisterWindowMessage("TaskbarCreated");
     private readonly IntPtr icon;
     private bool added;
 
-    public TrayIcon(HwndSource source, Func<(string Tip, string Open, string Exit)> labels, Action open, Action exit)
+    // Entries are listed under Open; one without an action is shown greyed out, as a heading or note.
+    public TrayIcon(HwndSource source, Func<(string Tip, string Open, string Exit)> labels, Action open, Action exit,
+        Func<IReadOnlyList<(string Text, Action? Run)>>? entries = null)
     {
-        this.source = source; this.labels = labels; this.open = open; this.exit = exit;
+        this.source = source; this.labels = labels; this.open = open; this.exit = exit; this.entries = entries;
         ExtractIconEx(Environment.ProcessPath!, 0, out var large, out icon, 1);
         if (large != IntPtr.Zero) DestroyIcon(large);
         source.AddHook(Messages);
@@ -26,8 +30,28 @@ public sealed class TrayIcon : IDisposable
     private void Add()
     {
         var data = Data();
-        data.Flags = 1 | 2 | 4; data.CallbackMessage = CallbackMessage; data.Icon = icon; data.Tip = labels().Tip;
+        data.Flags = 1 | 2 | 4; data.CallbackMessage = CallbackMessage; data.Icon = icon; data.Tip = Tip();
         added = Shell_NotifyIcon(0, ref data) || Shell_NotifyIcon(1, ref data);
+    }
+
+    private string Tip() { var text = tip ?? labels().Tip; return text.Length > 127 ? text[..127] : text; }
+
+    public void SetTip(string? text)
+    {
+        if (tip == text) return;
+        tip = text;
+        if (!added) return;
+        var data = Data(); data.Flags = 4; data.Tip = Tip();
+        Shell_NotifyIcon(1, ref data);
+    }
+
+    // A one-off Windows notification from the icon.
+    public void Notify(string title, string text)
+    {
+        if (!added) return;
+        var data = Data(); data.Flags = 0x10; data.InfoTitle = title.Length > 63 ? title[..63] : title;
+        data.Info = text.Length > 255 ? text[..255] : text; data.InfoFlags = 1;
+        Shell_NotifyIcon(1, ref data);
     }
 
     private NotifyIconData Data() => new() { Size = Marshal.SizeOf<NotifyIconData>(), Window = source.Handle, Id = 1, Tip = "", Info = "", InfoTitle = "" };
@@ -49,10 +73,13 @@ public sealed class TrayIcon : IDisposable
     private void Menu(IntPtr hwnd)
     {
         var text = labels();
+        var listed = entries?.Invoke() ?? [];
         var menu = CreatePopupMenu();
         try
         {
             AppendMenu(menu, 0, OpenCommand, text.Open);
+            if (listed.Count > 0) AppendMenu(menu, 0x800, 0, null);
+            for (var i = 0; i < listed.Count; i++) AppendMenu(menu, listed[i].Run is null ? 0x1 : 0, FirstEntry + i, listed[i].Text);
             AppendMenu(menu, 0x800, 0, null);
             AppendMenu(menu, 0, ExitCommand, text.Exit);
             SetMenuDefaultItem(menu, OpenCommand, 0);
@@ -63,6 +90,7 @@ public sealed class TrayIcon : IDisposable
             PostMessage(hwnd, 0, IntPtr.Zero, IntPtr.Zero);
             if (command == OpenCommand) open();
             else if (command == ExitCommand) exit();
+            else if (command >= FirstEntry && command - FirstEntry < listed.Count) listed[command - FirstEntry].Run?.Invoke();
         }
         finally { DestroyMenu(menu); }
     }

@@ -20,6 +20,13 @@ public sealed record AppSettings
     public bool BreakPrompt { get; init; } = true;
     public int BreakPromptSeconds { get; init; } = 40;
     public int CoffeeBreakMaxMinutes { get; init; } = 25;
+    // Quick choices offered for the free-text reasons in the prompt and the pairs table.
+    public string[] BreakSuggestions { get; init; } = [];
+    public string[] WorkSuggestions { get; init; } = ["Megbeszélés"];
+    // 0 turns the daily goal off; the summary compares days with data against it.
+    public int DailyGoalMinutes { get; init; } = 480;
+    public bool GoalNotification { get; init; } = true;
+    public DayOfWeek WeekStart { get; init; } = DayOfWeek.Monday;
 
     public void Validate()
     {
@@ -30,6 +37,13 @@ public sealed record AppSettings
         if (Language is not ("hu" or "en") || Theme is not ("auto" or "dark" or "light"))
             throw new ArgumentException("Érvénytelen nyelv vagy téma.");
         if (LockTimeSource is not ("lock" or "activity")) throw new ArgumentException("Érvénytelen aktivitási időforrás.");
+        if (DailyGoalMinutes is < 0 or > 1440 || !Enum.IsDefined(WeekStart)) throw new ArgumentException("Érvénytelen napi cél vagy hétkezdés.");
+        foreach (var list in new[] { BreakSuggestions, WorkSuggestions })
+        {
+            if (list is null || list.Length > 20) throw new ArgumentException("Legfeljebb 20 ajánlat adható meg.");
+            foreach (var item in list)
+                if (string.IsNullOrWhiteSpace(item) || BreakReasons.CleanText(item) != item) throw new ArgumentException("Érvénytelen ajánlat.");
+        }
         if (!string.IsNullOrWhiteSpace(WorkbookPath) && !WorkbookPath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("A munkaidőfájl .xlsx formátumú legyen.");
     }

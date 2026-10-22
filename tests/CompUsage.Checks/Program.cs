@@ -448,6 +448,63 @@ Check("Answered stand-ups and meetings count as work; coffee and other breaks sp
     Equal(meetingDay.Pairs[0].Id, meetingDay.Meeting!.Id);
 });
 
+Check("Other work counts as work with its own text; unanswered prompt records never set a reason", () =>
+{
+    True(BreakReasons.CountsAsWork(BreakReasons.Work) && BreakReasons.HasText(BreakReasons.Work) && !BreakReasons.CountsAsWork(BreakReasons.Other));
+    Equal("work:Megbeszélés", BreakReasons.Encode("work", " Megbeszélés ")); Equal(("work", "Megbeszélés"), BreakReasons.Parse("work:Megbeszélés"));
+    Equal(BreakReasons.Other, BreakReasons.Codes[^1]);
+    List<LockEvent> Events() => [Event(16,"08:00",false), Event(16,"14:00",true), Event(16,"14:40",false), Event(16,"17:00",true)];
+    var list = Events();
+    var work = WorkReports.Build(list, settings, lunches, now, zone, breaks: [new BreakNote(At(16,"14:00"), At(16,"14:40"), BreakReasons.Work, "Megbeszélés")]).Single();
+    Equal(1, work.Sections.Count); Equal("Megbeszélés", work.Pairs[0].ReasonText);
+    var open = WorkReports.Build(list, settings, lunches, now, zone, breaks: [new BreakNote(At(16,"14:00"), At(16,"14:40"), "", Suggestion: BreakReasons.Meeting)]).Single();
+    True(open.Pairs[0].Reason is null); Equal(2, open.Sections.Count);
+});
+Check("A manual no-reason choice keeps a pair out of the lunch guess", () =>
+{
+    var events = Day(16).ToList();
+    var plain = WorkReports.Build(events, settings, lunches, now, zone).Single(d => d.Date == new DateOnly(2026,10,16));
+    var guessed = plain.Lunch!;
+    var excluded = WorkReports.Build(events, settings, lunches, now, zone, reasons: new Dictionary<string, string> { [guessed.Id] = "none" })
+        .Single(d => d.Date == new DateOnly(2026,10,16));
+    True(excluded.Lunch?.Id != guessed.Id); True(excluded.Pairs.Single(p => p.Id == guessed.Id).ReasonManual);
+});
+Check("Daily goal, week start and suggestion lists validate", () =>
+{
+    Equal(480, settings.DailyGoalMinutes); True(settings.GoalNotification); Equal(DayOfWeek.Monday, settings.WeekStart);
+    Equal("Megbeszélés", settings.WorkSuggestions.Single()); Equal(0, settings.BreakSuggestions.Length);
+    (settings with { DailyGoalMinutes = 0, WeekStart = DayOfWeek.Sunday }).Validate();
+    Throws<ArgumentException>(() => (settings with { DailyGoalMinutes = 1441 }).Validate());
+    Throws<ArgumentException>(() => (settings with { WeekStart = (DayOfWeek)9 }).Validate());
+    Throws<ArgumentException>(() => (settings with { BreakSuggestions = [" Orvos"] }).Validate());
+    Throws<ArgumentException>(() => (settings with { WorkSuggestions = Enumerable.Repeat("x", 21).ToArray() }).Validate());
+    Throws<ArgumentException>(() => (settings with { WorkSuggestions = [""] }).Validate());
+});
+Check("Weekly and monthly summaries measure complete days against the goal and break time down by reason", () =>
+{
+    Equal("7:59", WorkSummary.Clock(TimeSpan.FromSeconds(7 * 3600 + 59 * 60 + 29))); Equal("-0:30", WorkSummary.Clock(TimeSpan.FromMinutes(-30))); Equal("0:00", WorkSummary.Clock(TimeSpan.FromSeconds(-20)));
+    Equal(new DateOnly(2026,10,12), WorkSummary.WeekStart(new(2026,10,16), DayOfWeek.Monday));
+    Equal(new DateOnly(2026,10,11), WorkSummary.WeekStart(new(2026,10,16), DayOfWeek.Sunday));
+    Equal(new DateOnly(2026,10,18), WorkSummary.WeekStart(new(2026,10,18), DayOfWeek.Sunday));
+    // Fri 16 (complete), Sun 18 (complete), Mon 19 (incomplete: missing first unlock).
+    var events = Day(16).Concat([Event(18,"09:00",false), Event(18,"10:00",true), Event(18,"10:30",false), Event(18,"12:00",true)])
+        .Concat([Event(19,"09:00",true), Event(19,"09:30",false)]).ToList();
+    var notes = new[] { new BreakNote(At(18,"10:00"), At(18,"10:30"), BreakReasons.Coffee) };
+    var days = WorkReports.Build(events, settings, lunches, now, zone, breaks: notes);
+    var weeks = WorkSummary.Weeks(days, settings, new DateOnly(2026,10,14), new DateOnly(2026,10,19));
+    Equal(2, weeks.Count); Equal(new DateOnly(2026,10,19), weeks[0].From); True(weeks[0].Ongoing); Equal(0, weeks[0].Days); Equal(1, weeks[0].IncompleteDays);
+    var week = weeks[1];
+    Equal(new DateOnly(2026,10,12), week.From); True(week.Partial); Equal(2, week.Days);
+    var friday = days.Single(d => d.Date == new DateOnly(2026,10,16));
+    Equal(WorkSummary.Worked(friday) + TimeSpan.FromMinutes(150), week.Worked);
+    Equal(TimeSpan.FromMinutes(960), week.Expected); Equal(week.Worked - week.Expected, week.Balance);
+    Equal(friday.Lunch!.Duration, week.Reasons[BreakReasons.Lunch]); Equal(TimeSpan.FromMinutes(30), week.Reasons[BreakReasons.Coffee]);
+    var sundayWeeks = WorkSummary.Weeks(days, settings with { WeekStart = DayOfWeek.Sunday }, new DateOnly(2026,10,14), new DateOnly(2026,10,19));
+    Equal(new DateOnly(2026,10,18), sundayWeeks[0].From); Equal(1, sundayWeeks[0].Days); Equal(1, sundayWeeks[0].IncompleteDays);
+    var months = WorkSummary.Months(days, settings with { DailyGoalMinutes = 0 }, new DateOnly(2026,10,14), new DateOnly(2026,10,19));
+    Equal(1, months.Count); Equal(new DateOnly(2026,10,31), months[0].To); Equal(TimeSpan.Zero, months[0].Expected); Equal(2, months[0].Days);
+});
+
 var fixtureRoot = Path.Combine(Path.GetTempPath(), "CompUsage-Checks-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(fixtureRoot);
 string Fixture(string name)
@@ -498,6 +555,9 @@ try
         True(journal.Load("3").LockedAt is null); Equal(1,journal.Load("3").Breaks.Count);
         loaded.SessionEnded = true; loaded.StoppedAt = now.AddSeconds(20); journal.Heartbeat(loaded,now.AddSeconds(20));
         True(journal.Load("3").SessionEnded); Equal(now.AddSeconds(20),journal.Load("3").StoppedAt);
+        loaded.GoalNotifiedOn = "2026-10-19"; loaded.Breaks.Add(new(now.AddMinutes(-15),now.AddMinutes(-1),"",Suggestion:BreakReasons.Meeting));
+        journal.Save(loaded,now.AddSeconds(25)); journal.Heartbeat(loaded,now.AddSeconds(25));
+        Equal("2026-10-19",journal.Load("3").GoalNotifiedOn); Equal(BreakReasons.Meeting,journal.Load("3").Breaks[^1].Suggestion);
     });
     Check("Excel writes only Date/From/To: durations and Details stay to the workbook, also when completing a row",()=>
     {

@@ -110,15 +110,15 @@ public static class WorkReports
         var meeting = !settings.IgnoreDailyMeeting ? null : manualMeeting
             ? pairs.Find(p => p.Id == chosenMeeting && p.Id != explicitLunch?.Id)
             : pairs.Where(p => p.Id != explicitLunch?.Id && p.Reason == BreakReasons.Standup).OrderBy(p => p.Lock.WorkTimestamp).FirstOrDefault()
-                ?? pairs.Where(p => p.Id != explicitLunch?.Id && p.Reason is null && p.Duration > TimeSpan.Zero
+                ?? pairs.Where(p => p.Id != explicitLunch?.Id && p.Reason is null && !p.ReasonManual && p.Duration > TimeSpan.Zero
                     && p.Duration.TotalMinutes <= settings.MaximumMeetingMinutes && IsMeetingStart(p.Lock.WorkTimestamp, settings, zone))
                 .OrderBy(p => MeetingDistance(p.Lock.WorkTimestamp, settings, zone)).ThenBy(p => p.Lock.WorkTimestamp).FirstOrDefault();
         if (manualMeeting && chosenMeeting != "none" && meeting is null)
             issues.Add("A korábban választott meetingpár már nem található vagy ebédként van kijelölve; válaszd ki újra.");
-        // An answered lunch beats the clock-based guess; pairs answered with another reason are never guessed as lunch.
+        // An answered lunch beats the clock-based guess; pairs answered otherwise, or set to no reason by hand, are never guessed.
         var guess = pairs.Where(p => p.Id != meeting?.Id && p.Reason == BreakReasons.Lunch)
                 .OrderBy(p => Math.Abs((p.Lock.WorkTimestamp - expected).Ticks)).ThenBy(p => p.Lock.WorkTimestamp).FirstOrDefault()
-            ?? pairs.Where(p => p.Id != meeting?.Id && p.Reason is null && p.Duration.TotalMinutes >= settings.MinimumLunchMinutes && p.Duration.TotalMinutes <= 120
+            ?? pairs.Where(p => p.Id != meeting?.Id && p.Reason is null && !p.ReasonManual && p.Duration.TotalMinutes >= settings.MinimumLunchMinutes && p.Duration.TotalMinutes <= 120
                 && Math.Abs((p.Lock.WorkTimestamp - expected).TotalMinutes) <= 120)
             .OrderBy(p => Math.Abs((p.Lock.WorkTimestamp - expected).Ticks)).ThenBy(p => p.Lock.WorkTimestamp).FirstOrDefault();
         var lunch = manual ? explicitLunch : guess;

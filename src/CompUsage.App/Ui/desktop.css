@@ -4,7 +4,6 @@ html,body{margin:0;min-height:100%;font-family:'Segoe UI',sans-serif;background:
 #compusage-cards-preview button{cursor:pointer}
 #compusage-cards-preview button:disabled{cursor:default}
 #compusage-cards-preview .cu-shell{max-width:1500px;margin:auto}
-#compusage-cards-preview .cu-titlebar{border-radius:0;padding-right:22px}
 #compusage-cards-preview .cu-overlay{position:fixed;inset:0;overflow:auto;padding:16px;border-radius:0;align-items:flex-start}
 #compusage-cards-preview .cu-dialog{margin-bottom:0;max-height:calc(100dvh - 32px);display:flex;flex-direction:column;overflow:hidden}
 #compusage-cards-preview .cu-dialog-bottom{position:static;flex-shrink:0;background:var(--cu-paper);padding-bottom:4px}
@@ -54,4 +53,3 @@ html,body{margin:0;min-height:100%;font-family:'Segoe UI',sans-serif;background:
 #compusage-cards-preview .cu-activity-status svg{vertical-align:middle}
 #compusage-cards-preview .cu-activity-value{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
 #compusage-cards-preview .cu-activity-value .cu-sub{display:flex;align-items:center;gap:5px}
-#compusage-cards-preview .cu-app-icon{width:28px;height:28px;flex-shrink:0;object-fit:contain}

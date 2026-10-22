@@ -48,7 +48,7 @@ public sealed class MainWindow : Window
         windowTheme = new WindowTheme(this, state.Settings.Theme);
         workbook = new WorkbookService(TimeZoneInfo.Local, excelCulture);
         display = new ExcelDisplay(new WorkbookFormats(), excelCulture, TimeZoneInfo.Local);
-        Title = state.Settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
+        Title = "CompUsage";
         Icon = BitmapFrame.Create(new Uri("pack://application:,,,/Assets/CompUsage.ico"));
         MinWidth = 600; MinHeight = 480;
         Width = state.Settings.RememberView ? state.Width : 1180;
@@ -171,8 +171,28 @@ public sealed class MainWindow : Window
         finally { gate.Release(); }
     }
 
-    private IReadOnlyList<WorkReport> Reports() => WorkReports.Build(state.Events, state.Settings, state.Lunches,
+    private IReadOnlyList<WorkReport> Reports(AppSettings? settings = null) => WorkReports.Build(state.Events, settings ?? state.Settings, state.Lunches,
         DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons);
+
+    // Weekly and monthly totals always cover the whole 60-day history, independent of the day list's range.
+    private object Summary()
+    {
+        var settings = state.Settings with { HistoryDays = 60 };
+        var days = Reports(settings);
+        var today = WorkDayClock.GetDate(DateTimeOffset.Now, settings.DayStart, TimeZoneInfo.Local);
+        var first = today.AddDays(-59);
+        if (state.OldestAvailable is { } oldest && WorkDayClock.GetDate(oldest, settings.DayStart, TimeZoneInfo.Local) > first)
+            first = WorkDayClock.GetDate(oldest, settings.DayStart, TimeZoneInfo.Local);
+        object Period(SummaryPeriod p) => new
+        {
+            from = display.Date(p.From), to = display.Date(p.To), year = p.From.Year, month = p.From.Month, days = p.Days, incomplete = p.IncompleteDays,
+            worked = WorkSummary.Clock(p.Worked), expected = WorkSummary.Clock(p.Expected), balance = WorkSummary.Clock(p.Balance),
+            ahead = p.Balance >= TimeSpan.Zero, reasons = p.Reasons.ToDictionary(r => r.Key, r => WorkSummary.Clock(r.Value)),
+            unanswered = WorkSummary.Clock(p.Unanswered), partial = p.Partial, ongoing = p.Ongoing
+        };
+        return new { goal = settings.DailyGoalMinutes, weeks = WorkSummary.Weeks(days, settings, first, today).Select(Period),
+            months = WorkSummary.Months(days, settings, first, today).Select(Period) };
+    }
 
     // The background monitor owns the notification-area icon; the window shows its own only while no monitor runs.
     private void UpdateTray()
@@ -251,7 +271,6 @@ public sealed class MainWindow : Window
                 if (ActivityMonitor.Wanted()) await ActivityMonitor.StartAndWaitAsync();
                 else await Task.Run(() => ActivityMonitor.Stop());
                 ReadActivity();
-                Title = settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
                 windowTheme.Set(settings.Theme);
                 await UpdateWorkbookInfoAsync(); return Snapshot();
             case "previewTheme":
@@ -289,17 +308,26 @@ public sealed class MainWindow : Window
                 activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
             case "breakReason":
                 var pairId = data.GetProperty("pairId").GetString();
-                var pair = Reports().SelectMany(d => d.Pairs).SingleOrDefault(p => p.Id == pairId)
+                var pairDay = Reports().FirstOrDefault(d => d.Pairs.Any(p => p.Id == pairId))
                     ?? throw new ArgumentException("A szünetpár megváltozott. Frissítsd a naplót, majd próbáld újra.");
+                var pair = pairDay.Pairs.First(p => p.Id == pairId);
+                var dayKey = pairDay.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
                 var reasonValue = data.GetProperty("reason");
-                var previousReason = state.BreakReasons.GetValueOrDefault(pair.Id);
-                if (reasonValue.ValueKind == JsonValueKind.Null) state.BreakReasons.Remove(pair.Id);
-                else state.BreakReasons[pair.Id] = BreakReasons.Encode(reasonValue.GetString()!,
+                var encoded = reasonValue.ValueKind == JsonValueKind.Null ? null : BreakReasons.Encode(reasonValue.GetString()!,
                     data.TryGetProperty("text", out var reasonText) && reasonText.ValueKind == JsonValueKind.String ? reasonText.GetString() : null);
+                var previous = (Reasons: new Dictionary<string, string>(state.BreakReasons), Lunch: state.Lunches.GetValueOrDefault(dayKey), Meeting: state.Meetings.GetValueOrDefault(dayKey));
+                // The reason list is the only day choice now: an older lunch or meeting pick on another pair becomes that pair's reason.
+                foreach (var (choice, code) in new[] { (previous.Lunch, BreakReasons.Lunch), (previous.Meeting, BreakReasons.Standup) })
+                    if (choice is not null && choice != "none" && choice != pair.Id && pairDay.Pairs.Any(p => p.Id == choice)) state.BreakReasons.TryAdd(choice, code);
+                state.Lunches.Remove(dayKey); state.Meetings.Remove(dayKey); undo.Remove(dayKey);
+                if (encoded is null) state.BreakReasons.Remove(pair.Id); else state.BreakReasons[pair.Id] = encoded;
                 try { store.Save(state); }
                 catch
                 {
-                    if (previousReason is null) state.BreakReasons.Remove(pair.Id); else state.BreakReasons[pair.Id] = previousReason;
+                    state.BreakReasons.Clear();
+                    foreach (var (id, value) in previous.Reasons) state.BreakReasons[id] = value;
+                    if (previous.Lunch is not null) state.Lunches[dayKey] = previous.Lunch;
+                    if (previous.Meeting is not null) state.Meetings[dayKey] = previous.Meeting;
                     throw;
                 }
                 activePlan = null; await UpdateWorkbookInfoAsync(); return Snapshot();
@@ -412,14 +440,29 @@ public sealed class MainWindow : Window
         return new { lastInput = TimeValue(record.LastInputAt, true), idle = ActivityHistory.IdleText(record) };
     }
 
-    private object Snapshot() => new
+    // The window title shows today's worked time; an incomplete or missing day shows the app name only.
+    private void UpdateTitle(IReadOnlyList<WorkReport> days)
     {
-        settings = state.Settings, logging = state.Logging, error = lastError, activity = activityInfo,
+        var today = days.FirstOrDefault(d => d.Ongoing);
+        var worked = today is null || today.Incomplete ? (TimeSpan?)null : WorkSummary.Worked(today);
+        Title = worked is { } value ? $"Computer usage: {(int)value.TotalHours}h {value.Minutes}m" : "CompUsage";
+    }
+
+    private object Snapshot()
+    {
+        var reports = Reports();
+        UpdateTitle(reports);
+        return SnapshotData(reports);
+    }
+
+    private object SnapshotData(IReadOnlyList<WorkReport> reports) => new
+    {
+        settings = state.Settings, logging = state.Logging, error = lastError, activity = activityInfo, summary = Summary(),
         permissions = new { readAccessRequired },
         user = Environment.UserName, refreshed = state.LastRefresh?.ToLocalTime().ToString("yyyy.MM.dd HH:mm:ss", CultureInfo.InvariantCulture),
         oldest = state.OldestAvailable?.ToLocalTime().ToString("yyyy.MM.dd HH:mm", CultureInfo.InvariantCulture),
         workbook = workbookInfo, expanded = state.Settings.RememberView ? state.Expanded : [], scroll = state.Settings.RememberView ? state.Scroll : 0,
-        days = Reports().Select(d => new
+        days = reports.Select(d => new
         {
             key = d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), date = display.Date(d.Date),
             weekday = d.Date.ToString("dddd", CultureInfo.GetCultureInfo("hu-HU")), status = d.Status, ongoing = d.Ongoing,

@@ -18,6 +18,8 @@ public sealed class ActivitySession
     public DateTimeOffset? LockedAt { get; set; }
     // True when Windows ended the session (sign-out, restart, shutdown), as opposed to a manual stop.
     public bool SessionEnded { get; set; }
+    // Work date (yyyy-MM-dd) of the last daily-goal notification, so a restart does not repeat it.
+    public string? GoalNotifiedOn { get; set; }
     public List<ActivityLock> Locks { get; set; } = [];
     public List<BreakNote> Breaks { get; set; } = [];
 }
@@ -99,7 +101,7 @@ public sealed class ActivityJournal(string directory)
         session.HeartbeatAt = now;
         // Keep the five-second health update small instead of rewriting sixty days of history each time.
         Write($"status-{session.SessionId}.json", new { session.SessionId, session.StartedAt, session.HeartbeatAt,
-            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt, session.SessionEnded });
+            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt, session.SessionEnded, session.GoalNotifiedOn });
     }
     public void Save(ActivitySession session, DateTimeOffset now)
     {

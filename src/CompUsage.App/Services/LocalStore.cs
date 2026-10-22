@@ -25,6 +25,9 @@ public sealed class LocalState
     public bool? Logging { get; set; }
 }
 
+public sealed record SharedState(AppSettings Settings, IReadOnlyDictionary<string, string> Lunches,
+    IReadOnlyDictionary<string, string> Meetings, IReadOnlyDictionary<string, string> BreakReasons);
+
 public sealed class LocalStore
 {
     public static string DirectoryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CompUsage");
@@ -47,18 +50,20 @@ public sealed class LocalStore
             throw new InvalidDataException($"Nem olvasható a beállításfájl: {path}. Az eredeti fájl megmaradt.", ex);
         }
     }
-    // Other processes read only the settings, and must never block the UI's replace of the file.
-    public static AppSettings ReadSettings()
+    // Other processes read only the settings and the day choices, and must never block the UI's replace of the file.
+    public static SharedState ReadShared()
     {
-        if (!File.Exists(FilePath)) return new();
+        if (!File.Exists(FilePath)) return new(new(), new Dictionary<string, string>(), new Dictionary<string, string>(), new Dictionary<string, string>());
         try
         {
             using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var document = JsonDocument.Parse(stream);
-            var settings = document.RootElement.TryGetProperty(nameof(LocalState.Settings), out var value)
-                ? value.Deserialize<AppSettings>(Json) ?? new() : new();
+            T Part<T>(string name) where T : new() =>
+                document.RootElement.TryGetProperty(name, out var value) ? value.Deserialize<T>(Json) ?? new() : new();
+            var settings = Part<AppSettings>(nameof(LocalState.Settings));
             settings.Validate();
-            return settings;
+            return new(settings, Part<Dictionary<string, string>>(nameof(LocalState.Lunches)),
+                Part<Dictionary<string, string>>(nameof(LocalState.Meetings)), Part<Dictionary<string, string>>(nameof(LocalState.BreakReasons)));
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {

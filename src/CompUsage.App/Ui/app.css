@@ -10,8 +10,6 @@
 #compusage-cards-preview .cu-primary:hover{filter:brightness(.94);background:var(--cu-button)}
 #compusage-cards-preview .cu-quiet{background:transparent;border-color:transparent;color:var(--cu-muted)}
 #compusage-cards-preview svg{flex-shrink:0}
-#compusage-cards-preview .cu-titlebar{padding:12px 110px 12px 22px;display:flex;align-items:center;gap:9px;min-height:50px;background:var(--cu-paper);border-radius:12px 12px 0 0;border-bottom:1px solid var(--cu-line);font-size:.83em}
-#compusage-cards-preview .cu-titlebar strong{font-weight:600}
 #compusage-cards-preview .cu-muted{color:var(--cu-muted)}
 #compusage-cards-preview .cu-shell{padding:22px}
 #compusage-cards-preview .cu-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -26,6 +24,8 @@
 #compusage-cards-preview .cu-segmented button[aria-pressed=true]{background:var(--cu-paper);border-color:var(--cu-line)}
 #compusage-cards-preview .cu-file{background:var(--cu-paper);border:1px solid var(--cu-line);padding:16px;border-radius:10px;margin-bottom:20px}
 #compusage-cards-preview .cu-file-name{font-weight:600;overflow-wrap:anywhere}
+#compusage-cards-preview .cu-file-open{font-weight:500;font-size:.9em;padding:4px 8px}
+#compusage-cards-preview .cu-file-actions{display:flex;flex-direction:column;align-items:stretch;gap:8px}
 #compusage-cards-preview .cu-pending{color:var(--cu-brand);font-size:.86em;margin-top:8px}
 #compusage-cards-preview .cu-section{margin-bottom:10px;font-size:.83em;color:var(--cu-muted)}
 #compusage-cards-preview .cu-day{background:var(--cu-paper);border:1px solid var(--cu-line);border-radius:10px;margin-bottom:14px}
@@ -61,7 +61,7 @@
 #compusage-cards-preview .cu-copy-fallback{margin:12px 0;padding:12px;background:var(--cu-soft);border-radius:8px}
 #compusage-cards-preview textarea{width:100%;min-height:100px;background:var(--cu-paper);border:1px solid var(--cu-line);border-radius:5px;padding:8px;white-space:pre;font-family:Consolas,monospace;font-size:.8em}
 #compusage-cards-preview .cu-overlay{position:absolute;inset:0;z-index:5;background:var(--cu-shade);border-radius:12px;padding:70px 16px 24px;display:flex;align-items:flex-start;justify-content:center}
-#compusage-cards-preview .cu-dialog{width:100%;max-width:600px;background:var(--cu-paper);color:var(--cu-ink);border:1px solid var(--cu-line);border-radius:12px;box-shadow:0 18px 60px var(--cu-shade);padding:22px}
+#compusage-cards-preview .cu-dialog{width:100%;max-width:760px;background:var(--cu-paper);color:var(--cu-ink);border:1px solid var(--cu-line);border-radius:12px;box-shadow:0 18px 60px var(--cu-shade);padding:22px}
 #compusage-cards-preview .cu-tabs{display:flex;gap:5px;flex-wrap:wrap;border-bottom:1px solid var(--cu-line);padding:16px 0 12px;margin-bottom:16px}
 #compusage-cards-preview .cu-tabs button{font-size:.9em;background:transparent;border-color:transparent}
 #compusage-cards-preview .cu-tabs button[aria-selected=true]{background:var(--cu-good-bg);color:var(--cu-brand)}
@@ -76,10 +76,18 @@
 #compusage-cards-preview .cu-import{border:1px solid var(--cu-line);padding:16px;border-radius:8px;margin:12px 0;background:var(--cu-paper)}
 #compusage-cards-preview .cu-resume{padding:12px;background:var(--cu-warn-bg);border-radius:7px;margin:12px 0;font-size:.87em}
 @media(max-width:740px){#compusage-cards-preview .cu-shell{padding:14px}#compusage-cards-preview .cu-metrics{grid-template-columns:1fr 1fr;gap:14px;padding:6px 16px 16px}#compusage-cards-preview .cu-metrics>div:nth-child(2){grid-column:1/-1;grid-row:2}#compusage-cards-preview .cu-day-head{gap:10px}#compusage-cards-preview .cu-work{padding:12px 16px}#compusage-cards-preview .cu-detail{padding:14px}#compusage-cards-preview .cu-file .cu-row{gap:9px}}
-@media(max-width:420px){#compusage-cards-preview .cu-shell{padding:10px}#compusage-cards-preview .cu-titlebar{padding-left:12px}#compusage-cards-preview .cu-titlebar .cu-muted{display:none}#compusage-cards-preview .cu-day-head{padding:12px}#compusage-cards-preview .cu-day-head>.cu-row{gap:6px}#compusage-cards-preview .cu-metric{font-size:1.4em}#compusage-cards-preview .cu-fields{grid-template-columns:1fr}#compusage-cards-preview .cu-dialog{padding:16px}#compusage-cards-preview .cu-overlay{padding:60px 8px 16px}#compusage-cards-preview .cu-tabs{gap:2px}#compusage-cards-preview .cu-tabs button{padding:6px}#compusage-cards-preview .cu-day-head>[data-copy-day]{font-size:.8em}}
+@media(max-width:420px){#compusage-cards-preview .cu-shell{padding:10px}#compusage-cards-preview .cu-day-head{padding:12px}#compusage-cards-preview .cu-day-head>.cu-row{gap:6px}#compusage-cards-preview .cu-metric{font-size:1.4em}#compusage-cards-preview .cu-fields{grid-template-columns:1fr}#compusage-cards-preview .cu-dialog{padding:16px}#compusage-cards-preview .cu-overlay{padding:60px 8px 16px}#compusage-cards-preview .cu-tabs{gap:2px}#compusage-cards-preview .cu-tabs button{padding:6px}#compusage-cards-preview .cu-day-head>[data-copy-day]{font-size:.8em}}
 @media(pointer:coarse){#compusage-cards-preview button,#compusage-cards-preview .cu-check{min-height:44px}#compusage-cards-preview input:not([readonly]),#compusage-cards-preview select{font-size:16px}}
 @media(pointer:coarse){#compusage-cards-preview .cu-value-copy{min-width:44px;min-height:44px}}
 #compusage-cards-preview .cu-reason-row{display:flex;align-items:center;gap:4px}
 #compusage-cards-preview .cu-reason-cell select,#compusage-cards-preview .cu-reason-text{padding:3px 6px;border:1px solid var(--cu-line);border-radius:6px;background:var(--cu-paper);color:var(--cu-ink)}
 #compusage-cards-preview .cu-reason-text{display:block;margin-top:4px;width:100%;min-width:140px}
 #compusage-cards-preview .cu-reason-cell .cu-sub{display:block}
+#compusage-cards-preview .cu-summary-block{background:var(--cu-paper);border:1px solid var(--cu-line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+#compusage-cards-preview .cu-summary-block h2{font-size:1em;margin:0 0 8px}
+#compusage-cards-preview .cu-summary-table td,#compusage-cards-preview .cu-summary-table th{padding:6px 8px}
+#compusage-cards-preview .cu-summary-table .cu-sub{display:block}
+#compusage-cards-preview .cu-period{font-weight:600}
+#compusage-cards-preview .cu-ahead{color:var(--cu-brand);font-weight:600}
+#compusage-cards-preview .cu-behind{color:var(--cu-warn);font-weight:600}
+#compusage-cards-preview textarea.cu-list-editor{min-height:64px;white-space:pre-wrap;font-family:inherit;font-size:.9em}

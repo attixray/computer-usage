@@ -23,22 +23,25 @@ public static class ActivityMonitor
         catch (WaitHandleCannotBeOpenedException) { return false; }
     }
 
-    private static (DateTime Stamp, AppSettings? Value) savedSettings;
+    private static (DateTime Stamp, SharedState? Value) savedState;
 
-    // The monitor only reads the app's settings; the UI stays the only writer of state.json.
-    public static AppSettings SavedSettings()
+    // The monitor only reads the app's settings and day choices; the UI stays the only writer of state.json.
+    public static SharedState SavedState()
     {
         try
         {
             var stamp = File.GetLastWriteTimeUtc(LocalStore.FilePath);
-            if (savedSettings.Value is null || stamp != savedSettings.Stamp) savedSettings = (stamp, LocalStore.ReadSettings());
-            return savedSettings.Value;
+            if (savedState.Value is null || stamp != savedState.Stamp) savedState = (stamp, LocalStore.ReadShared());
+            return savedState.Value;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return savedSettings.Value ?? new(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        { return savedState.Value ?? new(new(), new Dictionary<string, string>(), new Dictionary<string, string>(), new Dictionary<string, string>()); }
     }
+    public static AppSettings SavedSettings() => SavedState().Settings;
 
-    // Activity tracking is opt-in; break prompts are on by default. Either one keeps the monitor running.
-    public static bool Wanted() => Journal.Configuration().Enabled || SavedSettings().BreakPrompt;
+    // Activity tracking is opt-in; break prompts and the daily goal are on by default. Any of them keeps the monitor running.
+    public static bool Needed(AppSettings settings) => settings.BreakPrompt || settings.DailyGoalMinutes > 0;
+    public static bool Wanted() => Journal.Configuration().Enabled || Needed(SavedSettings());
 
     public static void Start()
     {
@@ -81,8 +84,8 @@ public static class ActivityMonitor
     {
         var journal = testDirectory is null ? Journal : new ActivityJournal(testDirectory);
         // Checks run with prompts off so they never show a window or touch the user's settings.
-        Func<AppSettings> settings = testDirectory is null ? SavedSettings : () => new AppSettings { BreakPrompt = false };
-        try { if (!journal.Configuration().Enabled && !settings().BreakPrompt) return 0; }
+        Func<AppSettings> settings = testDirectory is null ? SavedSettings : () => new AppSettings { BreakPrompt = false, DailyGoalMinutes = 0 };
+        try { if (!journal.Configuration().Enabled && !Needed(settings())) return 0; }
         catch { return 6; }
         using var mutex = new Mutex(true, MutexName(testDirectory), out var created);
         if (!created) return 0;
@@ -174,11 +177,15 @@ public static class ActivityMonitor
         private bool locked;
         private bool registered;
         private int ticks;
+        private readonly bool interactive;
+        private bool goalBusy;
+        private WorkReport? today;
+        private DateTimeOffset? todayAt;
 
         public Worker(Application app, ActivityJournal journal, string session, EventWaitHandle stop, string title,
             Func<AppSettings> settings, bool interactive)
         {
-            this.app = app; this.journal = journal; this.stop = stop; this.settings = settings;
+            this.app = app; this.journal = journal; this.stop = stop; this.settings = settings; this.interactive = interactive;
             // The newest record of any session tells when this computer was last in use before this sign-in: an open
             // lock, a sign-out or shutdown, or the last heartbeat after a crash. A monitor stopped by hand tells nothing.
             var previous = journal.ReadAll().MaxBy(s => s.HeartbeatAt);
@@ -194,7 +201,7 @@ public static class ActivityMonitor
             {
                 tray = new TrayIcon(window, () => settings().Language == "en"
                     ? ("CompUsage – work log", "Open CompUsage", "Stop background monitor")
-                    : ("CompUsage – munkaidőnapló", "CompUsage megnyitása", "Háttérfigyelő leállítása"), OpenApp, app.Shutdown);
+                    : ("CompUsage – munkaidőnapló", "CompUsage megnyitása", "Háttérfigyelő leállítása"), OpenApp, app.Shutdown, TodayBreaks);
                 // A sign-in shortly after a restart or sign-out ends a break as well; started later, the monitor stays quiet.
                 if (since is { } from && LogonTime(id) is { } logon && from < logon && DateTimeOffset.UtcNow - logon < TimeSpan.FromMinutes(5))
                     new DispatcherTimer(TimeSpan.FromSeconds(3), DispatcherPriority.Normal, (sender, _) =>
@@ -216,10 +223,11 @@ public static class ActivityMonitor
                 }
                 state.Enabled = journal.Configuration().Enabled;
                 if (!state.Enabled) { sampledAt = null; state.LastInputAt = null; }
-                if (!state.Enabled && !settings().BreakPrompt) { app.Shutdown(); return; }
+                if (!state.Enabled && !Needed(settings())) { app.Shutdown(); return; }
                 // Input times are only sampled when activity tracking is on; prompts need session notifications alone.
                 if (state.Enabled && !locked && IsInteractive(int.Parse(state.SessionId, CultureInfo.InvariantCulture))) Sample();
                 state.Error = registered ? null : "Session notifications are unavailable; retrying.";
+                if (ticks % 60 == 1 && !locked) UpdateGoal();
                 if (ticks++ % 5 == 0) Save();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
@@ -252,6 +260,7 @@ public static class ActivityMonitor
                     var from = state.LockedAt;
                     locked = false; sampledAt = null; state.LastInputAt = null; state.LockedAt = null; Tick(); Save();
                     if (from is { } start) { var to = DateTimeOffset.UtcNow; app.Dispatcher.BeginInvoke(() => Prompt(start, to)); }
+                    UpdateGoal();
                 }
                 else if (wParam.ToInt32() == 6) { state.SessionEnded = true; Save(); }
                 else if (wParam.ToInt32() is 2 or 4)
@@ -273,25 +282,135 @@ public static class ActivityMonitor
                 if (!BreakReasons.ShouldPrompt(from, to, current, zone)) return;
                 var day = WorkDayClock.GetDate(from, current.DayStart, zone);
                 var lunchNoted = state.Breaks.Any(b => b.Reason == BreakReasons.Lunch && WorkDayClock.GetDate(b.LockedAt, current.DayStart, zone) == day);
-                prompt?.Close();
-                prompt = new BreakPromptWindow(from, to, BreakReasons.Suggest(from, to, current, zone, lunchNoted), current, (reason, text, automatic) =>
-                {
-                    try
-                    {
-                        var note = new BreakNote(from, to, reason, BreakReasons.Parse(BreakReasons.Encode(reason, text)).Text, automatic);
-                        state.Breaks.RemoveAll(b => b.UnlockedAt == to);
-                        state.Breaks.Add(note);
-                        Save(true);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
-                    { state.Error = ex.Message; }
-                });
-                prompt.Closed += (sender, _) => { if (ReferenceEquals(sender, prompt)) prompt = null; };
-                prompt.Start();
+                var suggestion = BreakReasons.Suggest(from, to, current, zone, lunchNoted);
+                // Every asked break is kept, answered or not, so the tray menu can offer it again today.
+                if (state.Breaks.All(b => b.UnlockedAt != to)) { state.Breaks.Add(new BreakNote(from, to, "", Suggestion: suggestion)); Save(true); }
+                Show(new BreakPromptWindow(from, to, suggestion, current, Answer(from, to, suggestion)));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException
                 or ArgumentException or InvalidOperationException)
             { state.Error = ex.Message; }
+        }
+
+        // Reopens a break of today from the tray menu, starting from its saved answer or, if none, the lunch or meeting guess or the suggestion.
+        private void Reopen(WorkReport day, BreakPair pair, string? shown)
+        {
+            try
+            {
+                var current = settings();
+                var note = BreakReasons.Match(state.Breaks, pair);
+                var from = note?.LockedAt ?? pair.Lock.Timestamp;
+                var to = note?.UnlockedAt ?? pair.Unlock.Timestamp;
+                var suggestion = pair.Reason is null && shown is not null ? shown
+                    : note is not null && BreakReasons.Codes.Contains(note.Suggestion) ? note.Suggestion
+                    : BreakReasons.Suggest(from, to, current, TimeZoneInfo.Local, day.Lunch is not null && day.Lunch.Id != pair.Id);
+                Show(new BreakPromptWindow(from, to, suggestion, current, Answer(from, to, suggestion),
+                    reopened: true, currentReason: pair.Reason, currentText: pair.ReasonText));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+            { state.Error = ex.Message; }
+        }
+
+        private void Show(BreakPromptWindow window)
+        {
+            prompt?.Close();
+            prompt = window;
+            prompt.Closed += (sender, _) => { if (ReferenceEquals(sender, prompt)) prompt = null; };
+            prompt.Start();
+        }
+
+        private Action<string, string, bool> Answer(DateTimeOffset from, DateTimeOffset to, string suggestion) => (reason, text, automatic) =>
+        {
+            try
+            {
+                var note = new BreakNote(from, to, reason, BreakReasons.Parse(BreakReasons.Encode(reason, text)).Text, automatic, suggestion);
+                state.Breaks.RemoveAll(b => b.UnlockedAt == to);
+                state.Breaks.Add(note);
+                Save(true);
+                UpdateGoal();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+            { state.Error = ex.Message; }
+        };
+
+        // Today's pairs come from the Security log, so breaks before this monitor started or without a prompt are listed as well.
+        private IReadOnlyList<(string Text, Action? Run)> TodayBreaks()
+        {
+            var current = settings();
+            var english = current.Language == "en";
+            var zone = TimeZoneInfo.Local;
+            if (todayAt is null || DateTimeOffset.Now - todayAt > TimeSpan.FromSeconds(10))
+                try { var now = DateTimeOffset.Now; today = Today(SavedState(), ReadEvents(current, now), now); todayAt = now; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Diagnostics.Eventing.Reader.EventLogException
+                    or InvalidOperationException or ArgumentException or System.Security.SecurityException) { today = null; }
+            var list = new List<(string, Action?)> { (english ? "Today's breaks" : "Mai szünetek", null) };
+            if (today is not { } day) { list.Add((english ? "The Security log cannot be read" : "A Security napló nem olvasható", null)); return list; }
+            var pairs = day.Pairs.Where(p => p.Id == day.Lunch?.Id || p.Id == day.Meeting?.Id || p.Reason is not null
+                || p.Duration.TotalMinutes > current.SplitBreakMinutes).ToArray();
+            if (pairs.Length == 0) list.Add((english ? "No longer break yet today" : "Ma még nem volt hosszabb szünet", null));
+            foreach (var pair in pairs)
+            {
+                var shown = Shown(day, pair);
+                // A choice made in the app overrides the prompt, so it can only be changed there.
+                var manual = pair.ReasonManual || pair.Id == day.Lunch?.Id && day.ManualLunch || pair.Id == day.Meeting?.Id && day.ManualMeeting;
+                var answer = shown is null ? english ? "no answer" : "nincs válasz"
+                    : BreakPromptWindow.Label(shown, english).TrimEnd('…') + (shown == pair.Reason && pair.ReasonText.Length > 0 ? ": " + pair.ReasonText : "")
+                        + (manual ? english ? " (set in the app)" : " (az appban állítva)" : shown != pair.Reason ? english ? " (estimated)" : " (becsült)" : "");
+                if (answer.Length > 70) answer = answer[..69] + "…";
+                list.Add(($"{TimeZoneInfo.ConvertTime(pair.Lock.WorkTimestamp, zone):H:mm} – {TimeZoneInfo.ConvertTime(pair.Unlock.Timestamp, zone):H:mm} · {answer}"
+                    .Replace("&", "&&", StringComparison.Ordinal), manual ? OpenApp : () => Reopen(day, pair, shown)));
+            }
+            return list;
+        }
+
+        // The day's lunch and meeting are shown as their reasons, like the app's reason list.
+        private static string? Shown(WorkReport day, BreakPair pair) =>
+            pair.Id == day.Lunch?.Id ? BreakReasons.Lunch : pair.Id == day.Meeting?.Id ? BreakReasons.Standup : pair.Reason;
+
+        private static IReadOnlyList<LockEvent> ReadEvents(AppSettings current, DateTimeOffset now)
+        {
+            var from = WorkDayClock.At(WorkDayClock.GetDate(now, current.DayStart, TimeZoneInfo.Local), current.DayStart, TimeZoneInfo.Local);
+            return new SecurityEventService().Read(System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value, from, now).Events;
+        }
+
+        private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
+            WorkReports.Build(events, shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, null, state.Locks,
+                shared.Meetings, null, state.Breaks, shared.BreakReasons)
+            .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));
+
+        // Today's worked time from the Security log, with the app's day choices and this monitor's answers; also refreshes the tray list.
+        private async void UpdateGoal()
+        {
+            if (!interactive || goalBusy || tray is null) return;
+            goalBusy = true;
+            try
+            {
+                var shared = SavedState();
+                var current = shared.Settings;
+                var now = DateTimeOffset.Now;
+                var events = await Task.Run(() => ReadEvents(current, now));
+                var day = today = Today(shared, events, now); todayAt = now;
+                if (current.DailyGoalMinutes == 0) { tray.SetTip(null); return; }
+                var goal = TimeSpan.FromMinutes(current.DailyGoalMinutes);
+                var english = current.Language == "en";
+                if (day is null || day.Incomplete) { tray.SetTip(english ? "CompUsage · today: incomplete log" : "CompUsage · ma: hiányos napló"); return; }
+                var worked = WorkSummary.Worked(day);
+                var left = goal - worked;
+                tray.SetTip(english
+                    ? $"CompUsage · today {WorkSummary.Clock(worked)} / {WorkSummary.Clock(goal)} · " + (left > TimeSpan.Zero ? $"{WorkSummary.Clock(left)} to go" : "goal reached")
+                    : $"CompUsage · ma {WorkSummary.Clock(worked)} / {WorkSummary.Clock(goal)} · " + (left > TimeSpan.Zero ? $"még {WorkSummary.Clock(left)}" : "cél elérve"));
+                var key = day.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                if (left <= TimeSpan.Zero && current.GoalNotification && state.GoalNotifiedOn != key)
+                {
+                    state.GoalNotifiedOn = key; Save();
+                    tray.Notify(english ? "Daily goal reached" : "Napi cél elérve",
+                        english ? $"{WorkSummary.Clock(worked)} worked today." : $"Ma {WorkSummary.Clock(worked)} munkaidő.");
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Diagnostics.Eventing.Reader.EventLogException
+                or InvalidOperationException or ArgumentException or System.Security.SecurityException)
+            { tray.SetTip(null); today = null; }
+            finally { goalBusy = false; }
         }
 
         private static void OpenApp()

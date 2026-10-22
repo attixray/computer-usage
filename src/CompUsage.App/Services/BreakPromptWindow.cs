@@ -9,9 +9,12 @@ using Microsoft.Win32;
 namespace CompUsage.App.Services;
 
 // Small bottom-right question after a long break. A choice saves and closes at once; the countdown waits while the user is here.
+// Reopened from the tray, it starts from the saved answer and its timeout changes nothing.
 public sealed class BreakPromptWindow : Window
 {
     private readonly string suggestion;
+    private readonly string? current;
+    private readonly bool reopened;
     private readonly Action<string, string, bool> save;
     private readonly bool english;
     private readonly TimeSpan total;
@@ -19,16 +22,17 @@ public sealed class BreakPromptWindow : Window
     private readonly TextBlock countdown = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
     private readonly Border bar = new() { Height = 3, HorizontalAlignment = HorizontalAlignment.Left, CornerRadius = new CornerRadius(2) };
     private readonly Border track = new() { Height = 3, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 6, 0, 0) };
-    private readonly StackPanel otherRow = new() { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 6, 0, 0) };
-    private readonly TextBox otherText = new() { MaxLength = BreakReasons.MaximumText, Padding = new Thickness(6, 4, 6, 4) };
+    private readonly Dictionary<string, (StackPanel Row, TextBox Text)> textRows = [];
+    private readonly Dictionary<string, Button> buttons = [];
     private readonly Brush ink, muted, paper, line, brand, buttonInk, soft;
     private TimeSpan remaining;
     private DateTime lastTick = DateTime.UtcNow;
     private bool done;
 
-    public BreakPromptWindow(DateTimeOffset from, DateTimeOffset to, string suggestion, AppSettings settings, Action<string, string, bool> save)
+    public BreakPromptWindow(DateTimeOffset from, DateTimeOffset to, string suggestion, AppSettings settings, Action<string, string, bool> save,
+        bool reopened = false, string? currentReason = null, string currentText = "")
     {
-        this.suggestion = suggestion; this.save = save;
+        this.suggestion = suggestion; this.save = save; this.reopened = reopened; current = currentReason;
         english = settings.Language == "en";
         total = remaining = TimeSpan.FromSeconds(settings.BreakPromptSeconds);
         using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
@@ -39,7 +43,7 @@ public sealed class BreakPromptWindow : Window
             line = Pick(0xdbe4e8, 0x42545d); brand = Pick(0x146b66, 0x9aded6); buttonInk = Pick(0xffffff, 0x133b38); soft = Pick(0xedf3f4, 0x29383f);
         }
         Title = "CompUsage"; WindowStyle = WindowStyle.None; AllowsTransparency = true; Background = Brushes.Transparent;
-        ResizeMode = ResizeMode.NoResize; Topmost = true; ShowInTaskbar = false; ShowActivated = false;
+        ResizeMode = ResizeMode.NoResize; Topmost = true; ShowInTaskbar = false; ShowActivated = reopened;
         Width = 330; SizeToContent = SizeToContent.Height; FontFamily = new FontFamily("Segoe UI"); FontSize = 13; Foreground = ink;
 
         var minutes = (int)Math.Round((to - from).TotalMinutes);
@@ -53,18 +57,13 @@ public sealed class BreakPromptWindow : Window
         var content = new StackPanel();
         content.Children.Add(header);
         content.Children.Add(new TextBlock { Text = range, Foreground = muted, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) });
-        foreach (var reason in BreakReasons.Codes) content.Children.Add(Choice(reason));
-        var saveOther = Plain(english ? "Save" : "Mentés", null);
-        saveOther.Background = brand; saveOther.Foreground = buttonInk; saveOther.BorderBrush = brand; saveOther.Margin = new Thickness(6, 0, 0, 0);
-        saveOther.Click += (_, _) => Finish(BreakReasons.Other, otherText.Text, false);
-        otherText.Background = paper; otherText.Foreground = ink; otherText.BorderBrush = line; otherText.CaretBrush = ink;
-        otherText.KeyDown += (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; Finish(BreakReasons.Other, otherText.Text, false); } };
-        var otherLine = new DockPanel();
-        DockPanel.SetDock(saveOther, Dock.Right);
-        otherLine.Children.Add(saveOther); otherLine.Children.Add(otherText);
-        otherRow.Children.Add(new TextBlock { Text = english ? "Description (optional)" : "Leírás (nem kötelező)", Foreground = muted, FontSize = 11.5, Margin = new Thickness(0, 0, 0, 3) });
-        otherRow.Children.Add(otherLine);
-        content.Children.Add(otherRow);
+        foreach (var reason in BreakReasons.Codes)
+        {
+            content.Children.Add(Choice(reason));
+            if (BreakReasons.HasText(reason))
+                content.Children.Add(TextRow(reason, reason == BreakReasons.Work ? settings.WorkSuggestions : settings.BreakSuggestions,
+                    reason == currentReason ? currentText : ""));
+        }
         countdown.Foreground = muted; countdown.Margin = new Thickness(0, 10, 0, 0);
         track.Background = soft; bar.Background = brand; track.Child = bar;
         content.Children.Add(countdown); content.Children.Add(track);
@@ -76,6 +75,11 @@ public sealed class BreakPromptWindow : Window
         {
             var area = SystemParameters.WorkArea;
             Left = area.Right - ActualWidth - 6; Top = area.Bottom - ActualHeight - 6;
+            if (!reopened) return;
+            // The saved answer, or the suggestion when there is none, has the keyboard focus.
+            var focus = current ?? suggestion;
+            Activate();
+            if (BreakReasons.HasText(focus)) Open(focus); else buttons[focus].Focus();
         };
         timer = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Normal, (_, _) => Tick(), Dispatcher);
         Closed += (_, _) => timer.Stop();
@@ -84,33 +88,72 @@ public sealed class BreakPromptWindow : Window
 
     private Button Choice(string reason)
     {
-        var suggested = reason == suggestion;
-        var name = ReasonName(reason);
-        var note = reason == BreakReasons.Other ? "" : BreakReasons.CountsAsWork(reason) ? (english ? "work time" : "munkaidő") : (english ? "break" : "szünet");
+        var selected = reason == (current ?? suggestion);
+        var kind = BreakReasons.CountsAsWork(reason) ? (english ? "work time" : "munkaidő") : (english ? "break" : "szünet");
+        var marks = new List<string>();
+        if (reason == current) marks.Add(english ? "saved" : "mentett");
+        if (reason == suggestion) marks.Add(english ? "suggested" : "javasolt");
+        marks.Add(kind);
         var row = new DockPanel();
-        var right = new TextBlock { Text = suggested ? (english ? "suggested · " : "javasolt · ") + note : note, FontSize = 11.5, Opacity = 0.85, VerticalAlignment = VerticalAlignment.Center };
+        var right = new TextBlock { Text = string.Join(" · ", marks), FontSize = 11.5, Opacity = 0.85, VerticalAlignment = VerticalAlignment.Center };
         DockPanel.SetDock(right, Dock.Right);
         row.Children.Add(right);
-        row.Children.Add(new TextBlock { Text = name, FontWeight = suggested ? FontWeights.SemiBold : FontWeights.Normal });
+        row.Children.Add(new TextBlock { Text = ReasonName(reason), FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal });
         var button = Plain(null, null);
         button.Content = row; button.HorizontalContentAlignment = HorizontalAlignment.Stretch; button.Margin = new Thickness(0, 0, 0, 4);
         button.Padding = new Thickness(10, 6, 10, 6);
-        if (suggested) { button.Background = brand; button.Foreground = buttonInk; button.BorderBrush = brand; }
-        button.Click += (_, _) =>
-        {
-            if (reason != BreakReasons.Other) { Finish(reason, "", false); return; }
-            otherRow.Visibility = Visibility.Visible;
-            Activate(); otherText.Focus();
-        };
+        if (selected) { button.Background = brand; button.Foreground = buttonInk; button.BorderBrush = brand; }
+        button.Click += (_, _) => { if (BreakReasons.HasText(reason)) Open(reason); else Finish(reason, "", false); };
+        buttons[reason] = button;
         return button;
     }
 
-    private string ReasonName(string reason) => reason switch
+    // Free-text reasons: quick choices save at once, or type a description and press Enter / Save.
+    private StackPanel TextRow(string reason, IEnumerable<string> suggestions, string text)
+    {
+        var panel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 6) };
+        var chips = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
+        foreach (var item in suggestions)
+        {
+            var chip = Plain(item, null);
+            chip.Margin = new Thickness(0, 0, 4, 4); chip.Padding = new Thickness(8, 2, 8, 2); chip.FontSize = 12;
+            if (reason == current && item == text) { chip.Background = brand; chip.Foreground = buttonInk; chip.BorderBrush = brand; }
+            chip.Click += (_, _) => Finish(reason, item, false);
+            chips.Children.Add(chip);
+        }
+        if (chips.Children.Count > 0) panel.Children.Add(chips);
+        var box = new TextBox { MaxLength = BreakReasons.MaximumText, Padding = new Thickness(6, 4, 6, 4), Text = text,
+            Background = paper, Foreground = ink, BorderBrush = line, CaretBrush = ink };
+        box.KeyDown += (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; Finish(reason, box.Text, false); } };
+        var saveText = Plain(english ? "Save" : "Mentés", null);
+        saveText.Background = brand; saveText.Foreground = buttonInk; saveText.BorderBrush = brand; saveText.Margin = new Thickness(6, 0, 0, 0);
+        saveText.Click += (_, _) => Finish(reason, box.Text, false);
+        var lineRow = new DockPanel();
+        DockPanel.SetDock(saveText, Dock.Right);
+        lineRow.Children.Add(saveText); lineRow.Children.Add(box);
+        panel.Children.Add(new TextBlock { Text = english ? "Description (optional)" : "Leírás (nem kötelező)", Foreground = muted, FontSize = 11.5, Margin = new Thickness(0, 0, 0, 3) });
+        panel.Children.Add(lineRow);
+        textRows[reason] = (panel, box);
+        return panel;
+    }
+
+    private void Open(string reason)
+    {
+        foreach (var (code, row) in textRows) row.Row.Visibility = code == reason ? Visibility.Visible : Visibility.Collapsed;
+        Activate();
+        var box = textRows[reason].Text;
+        box.Focus(); box.CaretIndex = box.Text.Length;
+    }
+
+    private string ReasonName(string reason) => Label(reason, english);
+
+    public static string Label(string reason, bool english) => reason switch
     {
         BreakReasons.Standup => english ? "Stand-up meeting" : "Standup meeting",
         BreakReasons.Lunch => english ? "Lunch break" : "Ebédszünet",
         BreakReasons.Coffee => english ? "Coffee break" : "Kávészünet",
         BreakReasons.Meeting => "Meeting",
+        BreakReasons.Work => english ? "Other work…" : "Egyéb munka…",
         _ => english ? "Other break…" : "Egyéb szünet…"
     };
 
@@ -118,6 +161,9 @@ public sealed class BreakPromptWindow : Window
     {
         var button = new Button { Content = text, ToolTip = tip, Background = soft, Foreground = ink, BorderBrush = line, BorderThickness = new Thickness(1),
             Padding = new Thickness(8, 3, 8, 3), Cursor = Cursors.Hand, FocusVisualStyle = null };
+        // Keyboard focus shows as a stronger outline, since the default dotted focus rectangle is turned off.
+        button.GotKeyboardFocus += (_, _) => { button.Tag = button.BorderBrush; button.BorderBrush = ink; button.BorderThickness = new Thickness(2); };
+        button.LostKeyboardFocus += (_, _) => { if (button.Tag is Brush old) button.BorderBrush = old; button.BorderThickness = new Thickness(1); };
         // A flat template keeps the brand colors on hover instead of the default blue chrome.
         var border = new FrameworkElementFactory(typeof(Border));
         border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
@@ -150,7 +196,7 @@ public sealed class BreakPromptWindow : Window
         lastTick = now;
         if (remaining <= TimeSpan.Zero)
         {
-            if (BreakReasons.SavedOnTimeout(suggestion)) Finish(suggestion, "", true); else Finish(null, "", false);
+            if (!reopened && BreakReasons.SavedOnTimeout(suggestion)) Finish(suggestion, "", true); else Finish(null, "", false);
             return;
         }
         Update(paused);
@@ -159,7 +205,8 @@ public sealed class BreakPromptWindow : Window
     private void Update(bool paused)
     {
         var seconds = (int)Math.Ceiling(Math.Max(0, remaining.TotalSeconds));
-        var outcome = BreakReasons.SavedOnTimeout(suggestion)
+        var outcome = reopened ? (english ? "nothing changes" : "semmi nem változik")
+            : BreakReasons.SavedOnTimeout(suggestion)
             ? (english ? $"then “{ReasonName(suggestion)}” is saved" : $"utána a(z) „{ReasonName(suggestion)}” mentődik")
             : (english ? "nothing is saved" : "semmi nem mentődik");
         countdown.Text = paused
