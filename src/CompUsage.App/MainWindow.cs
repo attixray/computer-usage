@@ -32,6 +32,8 @@ public sealed class MainWindow : Window
     private IReadOnlyList<ActivityLock> activityLocks = [];
     private IReadOnlyList<BreakNote> breakNotes = [];
     private TrayIcon? tray;
+    private static readonly TimeSpan MonitorStartup = TimeSpan.FromSeconds(5);
+    private readonly DateTime opened = DateTime.UtcNow;
     private object? activityInfo;
     private readonly WindowTheme windowTheme;
     private bool readAccessRequired;
@@ -63,7 +65,13 @@ public sealed class MainWindow : Window
         if (state.Settings.RememberView && state.Maximized) WindowState = WindowState.Maximized;
         Content = view;
         Loaded += async (_, _) => await InitializeAsync();
-        SourceInitialized += (_, _) => UpdateTray();
+        SourceInitialized += (_, _) =>
+        {
+            UpdateTray();
+            var settle = new System.Windows.Threading.DispatcherTimer { Interval = MonitorStartup };
+            settle.Tick += (_, _) => { settle.Stop(); UpdateTray(); };
+            settle.Start();
+        };
         // While the window is active, ask the UI for a silent refresh on activation and once a minute.
         var autoRefresh = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
         autoRefresh.Tick += (_, _) => RequestAutoRefresh();
@@ -171,7 +179,10 @@ public sealed class MainWindow : Window
     {
         if (closing) return;
         var handle = new WindowInteropHelper(this).Handle;
-        var wanted = handle != IntPtr.Zero && !ActivityMonitor.IsRunning();
+        bool starting;
+        try { starting = DateTime.UtcNow - opened < MonitorStartup && ActivityMonitor.Wanted(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { starting = false; }
+        var wanted = handle != IntPtr.Zero && !ActivityMonitor.IsRunning() && !starting;
         if (wanted && tray is null)
             tray = new TrayIcon(HwndSource.FromHwnd(handle), () => state.Settings.Language == "en"
                 ? ("CompUsage – work log", "Open CompUsage", "Exit")
@@ -392,7 +403,7 @@ public sealed class MainWindow : Window
     {
         display = new ExcelDisplay(plan.Formats, excelCulture, TimeZoneInfo.Local);
         return new { token, rows = plan.Rows.Select(RowSnapshot), partials = plan.Partials.Select(p => new
-        { row = p.Row, section = RowSnapshot(p.Interval), keepsExistingComment = p.KeepsExistingComment, following = p.Following.Select(RowSnapshot), completesRow = p.CompletesRow }) };
+        { row = p.Row, section = RowSnapshot(p.Interval), following = p.Following.Select(RowSnapshot), completesRow = p.CompletesRow }) };
     }
 
     private object? ActivityValue(LockEvent? entry)

@@ -496,36 +496,32 @@ try
         Equal(1,loaded.Breaks.Count); Equal(BreakReasons.Coffee,loaded.Breaks[0].Reason); Equal(now.AddMinutes(-3),loaded.LockedAt);
         loaded.LockedAt = null; journal.Heartbeat(loaded,now.AddSeconds(10));
         True(journal.Load("3").LockedAt is null); Equal(1,journal.Load("3").Breaks.Count);
+        loaded.SessionEnded = true; loaded.StoppedAt = now.AddSeconds(20); journal.Heartbeat(loaded,now.AddSeconds(20));
+        True(journal.Load("3").SessionEnded); Equal(now.AddSeconds(20),journal.Load("3").StoppedAt);
     });
-    Check("Section comments reach Details as literal Unicode text, including formulas and Excel escape sequences",()=>
+    Check("Excel writes only Date/From/To: durations and Details stay to the workbook, also when completing a row",()=>
     {
-        var path=Fixture("comments-write");var day=Report(Day(16));
-        var notes=new Dictionary<string,string>{{day.Sections[0].Id," =SUM(1,2)\nÁrvíztűrő \"review\"\t_x0041_ "},{day.Sections[1].Id,"=2+2"}};
-        var days=WorkReports.Build(Day(16),settings,lunches,now,zone,comments:notes);
-        var plan=service.Preview(path,days);Equal(notes[day.Sections[0].Id],plan.Rows[0].Comment);service.Commit(plan,[]);
+        var path=Fixture("columns-abc");
+        var day=Report(Day(14,"08:11:24","17:03:55"));
+        var notes=new Dictionary<string,string>{{day.Sections[0].Id,"Not written"},{day.Sections[1].Id,"=2+2"}};
+        var days=WorkReports.Build(Day(14,"08:11:24","17:03:55").Concat(Day(15)),settings,lunches,now,zone,comments:notes);
+        var plan=service.Preview(path,days);Equal(1,plan.Partials.Count);True(plan.Rows.Count>0);
+        service.Commit(plan,[2]);
         using var book=new XLWorkbook(path);var sheet=book.Worksheet("Details");
-        // ClosedXML exposes inline Xstring escapes and normalizes line endings; Excel decodes them on display.
-        Equal(notes[day.Sections[0].Id],System.Xml.XmlConvert.DecodeName(sheet.Cell(3,6).GetString()).ReplaceLineEndings("\n"));Equal("=2+2",sheet.Cell(4,6).GetString());
-        True(!sheet.Cell(4,6).HasFormula);Equal("Existing description",sheet.Cell(2,6).GetString());
+        True(Math.Abs((At(14,"11:32:05").TimeOfDay-sheet.Cell(2,3).GetTimeSpan()).TotalMilliseconds)<1);
+        Equal("MOD(C2-B2,1)",sheet.Cell(2,4).FormulaA1);Equal("D2*24",sheet.Cell(2,5).FormulaA1);Equal("Existing description",sheet.Cell(2,6).GetString());
+        var last=sheet.LastRowUsed()!.RowNumber();True(last>=3);
+        for(var r=3;r<=last;r++){True(!sheet.Cell(r,1).IsEmpty()&&!sheet.Cell(r,2).IsEmpty());True(sheet.Cell(r,4).IsEmpty()&&sheet.Cell(r,5).IsEmpty()&&sheet.Cell(r,6).IsEmpty());}
     });
-    Check("Completing a partial fills a blank Details cell and preserves an existing description or formula",()=>
+    Check("Rows with prefilled duration formulas receive the new Date/From/To and keep their formulas",()=>
     {
-        foreach(var existing in new[]{"","Keep this description","=2+2"})
-        {
-            var path=Fixture("partial-comment-"+Guid.NewGuid().ToString("N"));
-            using(var book=new XLWorkbook(path))
-            {
-                var cell=book.Worksheet("Details").Cell(2,6);cell.Clear();
-                if(existing.StartsWith('='))cell.FormulaA1=existing[1..];else if(existing.Length>0)cell.Value=existing;
-                book.Save();
-            }
-            var day=Report(Day(14,"08:11:24","17:03:55"));
-            var notes=new Dictionary<string,string>{{day.Sections[0].Id,"New comment"}};
-            var days=WorkReports.Build(Day(14,"08:11:24","17:03:55"),settings,lunches,now,zone,comments:notes);
-            var plan=service.Preview(path,days);Equal(existing.Length>0,plan.Partials[0].KeepsExistingComment);
-            service.Commit(plan,[2]);using var result=new XLWorkbook(path);var actual=result.Worksheet("Details").Cell(2,6);
-            if(existing.StartsWith('='))Equal(existing[1..],actual.FormulaA1);else Equal(existing.Length>0?existing:"New comment",actual.GetString());
-        }
+        var path=Fixture("prefilled");
+        using(var b=new XLWorkbook(path)){var sh=b.Worksheet("Details");for(var r=3;r<=12;r++){sh.Cell(r,4).FormulaA1=$"IF(C{r}=\"\",\"\",MOD(C{r}-B{r},1))";sh.Cell(r,5).FormulaA1=$"IF(D{r}=\"\",\"\",D{r}*24)";}b.Save();}
+        var plan=service.Preview(path,reports);Equal(2,plan.LastRow);True(plan.Rows.Count>0);
+        service.Commit(plan,[]);
+        using var book=new XLWorkbook(path);var sheet=book.Worksheet("Details");
+        for(var r=3;r<3+plan.Rows.Count;r++){True(!sheet.Cell(r,1).IsEmpty()&&!sheet.Cell(r,2).IsEmpty());Equal($"IF(C{r}=\"\",\"\",MOD(C{r}-B{r},1))",sheet.Cell(r,4).FormulaA1);Equal($"IF(D{r}=\"\",\"\",D{r}*24)",sheet.Cell(r,5).FormulaA1);}
+        True(sheet.Cell(3+plan.Rows.Count,1).IsEmpty());
     });
     Check("Excel append keeps the daily meeting inside a continuous row and still excludes lunch",()=>
     {
@@ -567,6 +563,11 @@ try
             Equal("updated",File.ReadAllText(F("book.xlsx")));True(!File.Exists(F("backup2.xlsx")));
             File.Move(F("book.xlsx"),F("backup3.xlsx"));
             WorkbookService.ReplaceByRename(F("new.tmp"),F("book.xlsx"),F("backup3.xlsx"),fingerprint);Equal("again",File.ReadAllText(F("book.xlsx")));
+            // A held original keeps the workbook unchanged and leaves no stray backup behind.
+            File.WriteAllText(F("new.tmp"),"held");var heldFingerprint=Hash(F("book.xlsx"));
+            using(new FileStream(F("book.xlsx"),FileMode.Open,FileAccess.Read,FileShare.Read))
+                Throws<Exception>(()=>WorkbookService.ReplaceByRename(F("new.tmp"),F("book.xlsx"),F("backup4.xlsx"),heldFingerprint));
+            Equal("again",File.ReadAllText(F("book.xlsx")));True(!File.Exists(F("backup4.xlsx")));
             File.WriteAllText(F("new.tmp"),"x");Throws<FileNotFoundException>(()=>WorkbookService.ReplaceByRename(F("new.tmp"),F("missing.xlsx"),F("none.xlsx"),fingerprint));
         }finally{Directory.Delete(dir,true);}
     });

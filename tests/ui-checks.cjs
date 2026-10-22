@@ -147,7 +147,7 @@ const {parseHTML} = require('linkedom');
     await click('[data-section-copy="2026-10-16|0"]');assert.equal(clipboard,'2026.10.16\t08:02:14\t11:32:05');
     await click('[data-copy="3:29:51"]');assert.equal(clipboard,'3:29:51');state.days[0].sections[1].open=false;
   });
-  await check('Comments save without replacing the editor, survive refresh, and reach preview while row copy preserves Excel formulas',async()=>{
+  await check('Comments save without replacing the editor, survive refresh, but never reach the Excel preview, which writes only Date/From/To',async()=>{
     const editor=node('[data-section-comment="2026-10-16|0"]');const comment='Árvíztűrő "review"\tnext\nsecond line';
     editor.value=comment;editor.dispatchEvent(new window.Event('input',{bubbles:true}));await flush();await flush();
     assert.equal(node('[data-section-comment="2026-10-16|0"]'),editor);assert.equal(calls.findLast(c=>c.command==='sectionComment').data.comment,comment);
@@ -155,9 +155,9 @@ const {parseHTML} = require('linkedom');
     await click('[data-comment-copy="2026-10-16|0"]');assert.equal(clipboard,comment);
     await click('[data-section-copy="2026-10-16|0"]');assert.equal(clipboard,'2026.10.16\t08:02:14\t11:32:05');
     await click('[data-refresh]');assert.equal(node('[data-section-comment="2026-10-16|0"]').value,comment);
-    await click('[data-append]');assert.ok(node('[data-import]').textContent.includes(comment));await click('[data-close-plan]');
+    await click('[data-append]');assert.ok(!node('[data-import]').textContent.includes(comment));assert.match(node('[data-import]').textContent,/A–C/);assert.equal(node('[data-import] thead').textContent,'DateFromTo');await click('[data-close-plan]');
     const updated=node('[data-section-comment="2026-10-16|0"]');updated.value='Hossz';updated.dispatchEvent(new window.Event('input',{bubbles:true}));
-    await click('[data-append]');assert.ok(node('[data-import]').textContent.includes('Hossz'));await click('[data-close-plan]');
+    
     state.settings.language='hu';await click('[data-refresh]');assert.match(node('[data-section-details] summary').textContent,/Munkaszakaszok/);
     assert.equal(node('[data-section-comment="2026-10-16|0"]').value,'Hossz');state.settings.language='en';await click('[data-refresh]');
   });
@@ -167,7 +167,7 @@ const {parseHTML} = require('linkedom');
     const previews=calls.filter(c=>c.command==='preview').length;await click('[data-append]');assert.equal(calls.filter(c=>c.command==='preview').length,previews);
     failComment=false;receive({data:{command:'saveCommentsBeforeClose'}});await flush();await flush();
     assert.equal(calls.findLast(c=>c.command==='commentsPending').data.pending,false);assert.equal(state.days[0].sections[0].comment,'Unsaved note');
-    await click('[data-append]');assert.ok(node('[data-import]').textContent.includes('Unsaved note'));await click('[data-close-plan]');
+    await click('[data-append]');assert.ok(node('[data-import] thead'));await click('[data-close-plan]');
   });
   await check('Session-only endpoints have accurate labels and localized raw events without changing exact copy data',async()=>{
     const day=state.days[0];day.hasSessionEvents=true;day.firstFromSession=true;day.lastFromSession=true;day.lastFromActivity=false;
@@ -203,7 +203,7 @@ const {parseHTML} = require('linkedom');
   });
   await check('A partial preview shows the open section and the following rows of the day',async()=>{
     const section=state.days[0].sections[0];
-    previewPartials=[{row:2,keepsExistingComment:false,section:{...section,open:false},following:[{...section,id:'f1',open:true}]}];
+    previewPartials=[{row:2,section:{...section,open:false},following:[{...section,id:'f1',open:true}]}];
     await click('[data-append]');const text=node('[data-import]').textContent;
     assert.match(text,/Utána új sorként/);assert.equal(document.querySelectorAll('[data-partial-following]').length,1);assert.match(text,/üresen marad \(folyamatban\)/);
     assert.match(text,/legfeljebb 3 perccel/);previewPartials=[];await click('[data-close-plan]');

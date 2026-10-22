@@ -47,6 +47,24 @@ public sealed class LocalStore
             throw new InvalidDataException($"Nem olvasható a beállításfájl: {path}. Az eredeti fájl megmaradt.", ex);
         }
     }
+    // Other processes read only the settings, and must never block the UI's replace of the file.
+    public static AppSettings ReadSettings()
+    {
+        if (!File.Exists(FilePath)) return new();
+        try
+        {
+            using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var document = JsonDocument.Parse(stream);
+            var settings = document.RootElement.TryGetProperty(nameof(LocalState.Settings), out var value)
+                ? value.Deserialize<AppSettings>(Json) ?? new() : new();
+            settings.Validate();
+            return settings;
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidDataException($"Nem olvasható a beállításfájl: {FilePath}.", ex);
+        }
+    }
     public void Save(LocalState state)
     {
         var today = WorkDayClock.GetDate(DateTimeOffset.Now, state.Settings.DayStart, TimeZoneInfo.Local);

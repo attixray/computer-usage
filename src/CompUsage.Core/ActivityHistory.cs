@@ -16,6 +16,8 @@ public sealed class ActivitySession
     public string? Error { get; set; }
     // Start of the current break as seen by the monitor; it survives a restart so the next sign-in can ask about it.
     public DateTimeOffset? LockedAt { get; set; }
+    // True when Windows ended the session (sign-out, restart, shutdown), as opposed to a manual stop.
+    public bool SessionEnded { get; set; }
     public List<ActivityLock> Locks { get; set; } = [];
     public List<BreakNote> Breaks { get; set; } = [];
 }
@@ -97,7 +99,7 @@ public sealed class ActivityJournal(string directory)
         session.HeartbeatAt = now;
         // Keep the five-second health update small instead of rewriting sixty days of history each time.
         Write($"status-{session.SessionId}.json", new { session.SessionId, session.StartedAt, session.HeartbeatAt,
-            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt });
+            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt, session.SessionEnded });
     }
     public void Save(ActivitySession session, DateTimeOffset now)
     {

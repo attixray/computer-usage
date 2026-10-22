@@ -139,7 +139,7 @@ window.i18n = (() => {
         [/^Megkezdett sor befejezése \((\d+)\. sor\)$/,'Complete unfinished row (row $1)'],
         [/^Összes naplóesemény \((\d+)\)$/,'All log events ($1)'],
         [/^Munkaszakaszok \((\d+)\)$/,'Work sections ($1)'],
-        [/^(\d+) új sor · a teljes napokból és a mai napból\. A folyamatban lévő szakasz vége üresen marad\. A megjegyzések a Details oszlopba kerülnek\.$/,'$1 new rows from complete days and today. The end of a section in progress stays blank. Comments are written to the Details column.'],
+        [/^(\d+) új sor · a teljes napokból és a mai napból\. A folyamatban lévő szakasz vége üresen marad\. Csak az A–C oszlop \(Date, From, To\) íródik; a Duration képletei és a Details nem változnak\.$/,'$1 new rows from complete days and today. The end of a section in progress stays blank. Only columns A–C (Date, From, To) are written; Duration formulas and Details are left unchanged.'],
         [/^A nap folytatása \((\d+)\. sor után\)$/,'Continue the day (after row $1)'],
         [/^Lock \/ unlock párok \((\d+)\)$/,'Lock / unlock pairs ($1)'],
         [/^(Kézi választás|Automatikus \(lejárt kérdés\)|Felugró ablakból) · munkaidő$/,(_,source)=>`${text(source,'en')} · work time`],

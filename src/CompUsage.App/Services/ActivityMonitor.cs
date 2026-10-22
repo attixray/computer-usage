@@ -31,7 +31,7 @@ public static class ActivityMonitor
         try
         {
             var stamp = File.GetLastWriteTimeUtc(LocalStore.FilePath);
-            if (savedSettings.Value is null || stamp != savedSettings.Stamp) savedSettings = (stamp, new LocalStore().Load().Settings);
+            if (savedSettings.Value is null || stamp != savedSettings.Stamp) savedSettings = (stamp, LocalStore.ReadSettings());
             return savedSettings.Value;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return savedSettings.Value ?? new(); }
@@ -91,7 +91,7 @@ public static class ActivityMonitor
         try
         {
             using var worker = new Worker(app, journal, SessionId, stop, WindowTitle(testDirectory), settings, testDirectory is null);
-            app.SessionEnding += (_, _) => app.Shutdown();
+            app.SessionEnding += (_, _) => { worker.SessionEnding(); app.Shutdown(); };
             return app.Run();
         }
         catch (Exception ex)
@@ -179,11 +179,13 @@ public static class ActivityMonitor
             Func<AppSettings> settings, bool interactive)
         {
             this.app = app; this.journal = journal; this.stop = stop; this.settings = settings;
-            // The newest record of any session tells when this computer was last in use before this sign-in.
+            // The newest record of any session tells when this computer was last in use before this sign-in: an open
+            // lock, a sign-out or shutdown, or the last heartbeat after a crash. A monitor stopped by hand tells nothing.
             var previous = journal.ReadAll().MaxBy(s => s.HeartbeatAt);
-            var since = previous is null || previous.HeartbeatAt == default ? (DateTimeOffset?)null : previous.LockedAt ?? previous.StoppedAt ?? previous.HeartbeatAt;
+            var since = previous is null || previous.HeartbeatAt == default ? null : previous.LockedAt
+                ?? (previous.StoppedAt is null ? previous.HeartbeatAt : previous.SessionEnded ? previous.StoppedAt : null);
             state = journal.Load(session);
-            state.StartedAt = DateTimeOffset.UtcNow; state.StoppedAt = null; state.LastInputAt = null; state.LockedAt = null;
+            state.StartedAt = DateTimeOffset.UtcNow; state.StoppedAt = null; state.LastInputAt = null; state.LockedAt = null; state.SessionEnded = false;
             window = new HwndSource(new HwndSourceParameters(title) { Width = 0, Height = 0, WindowStyle = 0 });
             window.AddHook(Messages);
             var id = int.Parse(session, CultureInfo.InvariantCulture);
@@ -251,6 +253,7 @@ public static class ActivityMonitor
                     locked = false; sampledAt = null; state.LastInputAt = null; state.LockedAt = null; Tick(); Save();
                     if (from is { } start) { var to = DateTimeOffset.UtcNow; app.Dispatcher.BeginInvoke(() => Prompt(start, to)); }
                 }
+                else if (wParam.ToInt32() == 6) { state.SessionEnded = true; Save(); }
                 else if (wParam.ToInt32() is 2 or 4)
                 { locked = true; state.LockedAt ??= DateTimeOffset.UtcNow; sampledAt = null; state.LastInputAt = null; Save(); }
             }
@@ -258,6 +261,8 @@ public static class ActivityMonitor
             { state.Error = ex.Message; sampledAt = null; }
             return IntPtr.Zero;
         }
+
+        public void SessionEnding() => state.SessionEnded = true;
 
         private void Prompt(DateTimeOffset from, DateTimeOffset to)
         {
@@ -271,9 +276,15 @@ public static class ActivityMonitor
                 prompt?.Close();
                 prompt = new BreakPromptWindow(from, to, BreakReasons.Suggest(from, to, current, zone, lunchNoted), current, (reason, text, automatic) =>
                 {
-                    state.Breaks.RemoveAll(b => b.UnlockedAt == to);
-                    state.Breaks.Add(new BreakNote(from, to, reason, BreakReasons.Parse(BreakReasons.Encode(reason, text)).Text, automatic));
-                    Save(true);
+                    try
+                    {
+                        var note = new BreakNote(from, to, reason, BreakReasons.Parse(BreakReasons.Encode(reason, text)).Text, automatic);
+                        state.Breaks.RemoveAll(b => b.UnlockedAt == to);
+                        state.Breaks.Add(note);
+                        Save(true);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+                    { state.Error = ex.Message; }
                 });
                 prompt.Closed += (sender, _) => { if (ReferenceEquals(sender, prompt)) prompt = null; };
                 prompt.Start();

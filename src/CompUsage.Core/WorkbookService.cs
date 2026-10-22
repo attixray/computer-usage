@@ -5,7 +5,7 @@ using System.Xml.Linq;
 
 namespace CompUsage.Core;
 
-public sealed record PartialRow(int Row, WorkInterval Interval, bool KeepsExistingComment = false)
+public sealed record PartialRow(int Row, WorkInterval Interval)
 {
     // Later sections of the same day, appended right after a completed last row.
     public IReadOnlyList<WorkInterval> Following { get; init; } = [];
@@ -64,12 +64,9 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
             {
                 var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(candidate.From, zone).DateTime);
                 var existingFrom = WorkDayClock.At(localDate, TimeOnly.FromTimeSpan(from.Value), zone);
-                var existingComment = Text(Cell(row,"F"), strings);
-                var keepComment = !string.IsNullOrEmpty(existingComment) || Cell(row,"F")?.Element(Ns + "f") is not null;
                 // Later sections can follow only when the completed row is the sheet's last row.
                 var following = RowNumber(row) == lastRow ? sections.Where(s => s.From > candidate.From).ToArray() : [];
-                if (existingFrom < candidate.To) partials.Add(new(RowNumber(row), candidate with
-                { From = existingFrom, Comment = keepComment ? existingComment : candidate.Comment }, keepComment) { Following = following });
+                if (existingFrom < candidate.To) partials.Add(new(RowNumber(row), candidate with { From = existingFrom }) { Following = following });
             }
         }
         return new(Path.GetFullPath(path), Convert.ToHexString(SHA256.HashData(bytes)), lastDate, rows, partials, lastRow, date1904, formats);
@@ -98,7 +95,6 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                 var (sheet, sheetPath, _) = ReadSheet(zip);
                 var data = sheet.Root!.Element(Ns + "sheetData")!;
                 var styles = ReadXml(zip, "xl/styles.xml");
-                var strings = ReadStrings(zip);
                 var formats = new Dictionary<(int, string), int>();
                 var template = SheetRows(sheet).LastOrDefault(r => RowNumber(r) <= plan.LastRow && RowNumber(r) > 1);
                 var next = plan.LastRow;
@@ -116,26 +112,15 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                     }
                     Set(row, "A", index, ExcelDate(interval.Date, plan.Date1904), template);
                     Set(row, "B", index, LocalFraction(interval.From), template);
-                    // A still-open section keeps To and the durations blank, so a later append completes it as a started row.
-                    if (!interval.Open)
-                    {
-                        Set(row, "C", index, LocalFraction(interval.To), template);
-                        Set(row, "D", index, interval.Duration.TotalDays, template);
-                        Set(row, "E", index, interval.Duration.TotalHours, template);
-                    }
-                    if (interval.Comment.Length > 0) SetText(row, "F", index, interval.Comment, template);
+                    // Only Date/From/To are written: the durations and Details belong to the workbook's own formulas and text.
+                    // A still-open section keeps To blank, so a later append completes it as a started row.
+                    if (!interval.Open) Set(row, "C", index, LocalFraction(interval.To), template);
                     FormatRow(row, sheet, styles, formats, false, plan.Formats);
                 }
                 foreach (var partial in plan.Partials.Where(p => p.CompletesRow && selectedPartials.Contains(p.Row)))
                 {
                     var row = data.Elements(Ns + "row").Single(r => RowNumber(r) == partial.Row);
                     Set(row, "C", partial.Row, LocalFraction(partial.Interval.To), template);
-                    // Preserve existing duration formulas; only fill blank duration cells.
-                    if (Cell(row, "D")?.Element(Ns + "f") is null) Set(row, "D", partial.Row, partial.Interval.Duration.TotalDays, template);
-                    if (Cell(row, "E")?.Element(Ns + "f") is null) Set(row, "E", partial.Row, partial.Interval.Duration.TotalHours, template);
-                    if (partial.Interval.Comment.Length > 0 && Cell(row,"F")?.Element(Ns + "f") is null
-                        && string.IsNullOrEmpty(Text(Cell(row,"F"), strings)))
-                        SetText(row,"F",partial.Row,partial.Interval.Comment,template);
                     FormatRow(row, sheet, styles, formats, true, plan.Formats);
                 }
                 var dimension = sheet.Root.Element(Ns + "dimension");
@@ -175,6 +160,7 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
 
     public static void ReplaceByRename(string replacement, string path, string backup, string fingerprint)
     {
+        var created = false;
         if (File.Exists(path))
         {
             using var original = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -183,11 +169,18 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
             if (Convert.ToHexString(SHA256.HashData(memory.ToArray())) != fingerprint)
                 throw new IOException("Az Excel-fájl az előnézet óta megváltozott. Kérj új előnézetet.");
             using var copy = new FileStream(backup, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            created = true;
             memory.Position = 0; memory.CopyTo(copy); copy.Flush(true);
         }
         // A failed ReplaceFile can already have moved the original to the backup name; then only the rename remains.
         else if (!File.Exists(backup)) throw new FileNotFoundException("Az Excel-fájl nem található.", path);
-        File.Move(replacement, path, true);
+        try { File.Move(replacement, path, true); }
+        catch
+        {
+            // The original is untouched (for example Excel still holds it), so the copy made here is not a backup of anything.
+            if (created) File.Delete(backup);
+            throw;
+        }
     }
 
     private double LocalFraction(DateTimeOffset value) => TimeZoneInfo.ConvertTime(value, zone).TimeOfDay.TotalDays;
@@ -277,24 +270,13 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         cell.Add(new XElement(Ns + "v", value.ToString("R", Invariant)));
     }
 
-    private static void SetText(XElement row, string column, int index, string value, XElement? template)
-    {
-        // Inline text preserves Unicode/whitespace and never interprets a comment as an Excel formula.
-        Set(row,column,index,0,template);
-        var cell=Cell(row,column)!;
-        cell.Elements(Ns+"v").Remove();cell.SetAttributeValue("t","inlineStr");
-        var escaped=System.Text.RegularExpressions.Regex.Replace(value,@"_x[0-9a-fA-F]{4}_",m=>"_x005F_"+m.Value[1..]);
-        escaped=escaped.Replace("\r","_x000D_",StringComparison.Ordinal);
-        cell.Add(new XElement(Ns+"is",new XElement(Ns+"t",new XAttribute(XNamespace.Xml+"space","preserve"),escaped)));
-    }
-
     private static void FormatRow(XElement row, XDocument sheet, XDocument styles, Dictionary<(int, string), int> cache, bool partial, WorkbookFormats fallback)
     {
         var root = styles.Root!;
         var numbers = root.Element(Ns + "numFmts");
         if (numbers is null) { numbers = new XElement(Ns + "numFmts", new XAttribute("count", 0)); root.AddFirst(numbers); }
         var xfs = root.Element(Ns + "cellXfs") ?? throw new InvalidDataException("Hiányoznak az Excel cellastílusai.");
-        foreach (var (column, format) in new[] { ("A", fallback.Date), ("B", fallback.Start), ("C", fallback.End), ("D", fallback.Duration), ("E", fallback.Hours) })
+        foreach (var (column, format) in new[] { ("A", fallback.Date), ("B", fallback.Start), ("C", fallback.End) })
         {
             if (partial && column is "A" or "B") continue;
             var cell = Cell(row, column);
