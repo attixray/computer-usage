@@ -369,6 +369,7 @@ public sealed class MainWindow : Window
             weekday = d.Date.ToString("dddd", CultureInfo.GetCultureInfo("hu-HU")), status = d.Status, ongoing = d.Ongoing,
             incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.WorkTimestamp, true),
             firstFromSession = d.First?.IsSessionTransition ?? false, lastFromSession = d.Last?.IsSessionTransition ?? false,
+            firstFromSignIn = d.First?.IsSignInOrOut ?? false, lastFromSignOut = d.Last?.IsSignInOrOut ?? false,
             lastFromActivity = d.Last?.ActivityTimestamp is not null, lastActivity = ActivityValue(d.Last),
             manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.WorkTimestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },
@@ -379,7 +380,7 @@ public sealed class MainWindow : Window
             sections = d.Sections.Select(RowSnapshot),
             copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(display.CopyRow)) : "",
             eventCopy = "Dátum\tIdőpont\tEsemény\tAzonosító\r\n" + string.Join("\r\n", d.Events.Select(e => $"{TimeZoneInfo.ConvertTime(e.Timestamp, TimeZoneInfo.Local):yyyy.MM.dd}\t{Presentation.Time(e.Timestamp, TimeZoneInfo.Local, true)}\t{e.Label}\t{e.EventId}")),
-            hasSessionEvents = d.Events.Any(e => e.IsSessionTransition),
+            hasSessionEvents = d.Events.Any(e => e.IsSessionTransition), hasSignInEvents = d.Events.Any(e => e.IsSignInOrOut),
             events = d.Events.Select(e => new { time = TimeValue(e.Timestamp, e.IsLock), label = e.Label, eventId = e.EventId, isLock = e.IsLock, activity = ActivityValue(e) })
         })
     };

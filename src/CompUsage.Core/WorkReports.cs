@@ -68,7 +68,8 @@ public static class WorkReports
         var issues = new List<string>();
         if (list[0].IsLock) issues.Add("Hiányzik a nap kezdő feloldása.");
         if (!ongoing && !list[^1].IsLock) issues.Add("Hiányzik a nap záró zárolása.");
-        if (list.Select(e => e.SessionKey).Distinct().Count() > 1)
+        var sequential = SessionEvents.Sequential(list);
+        if (!sequential)
             issues.Add("Több Windows-munkamenet: a munkaszakaszok kézi ellenőrzést igényelnek.");
         if (list.Zip(list.Skip(1)).Any(p => p.First.IsLock == p.Second.IsLock))
             issues.Add("Az eseménysorban hiányzó vagy ismétlődő esemény van.");
@@ -76,12 +77,14 @@ public static class WorkReports
         var end = ongoing ? now : WorkDayClock.At(date.AddDays(1), settings.DayStart, zone);
         if (gaps.Any(g => g.From < end && (g.To ?? now) > start))
             issues.Add("A nap egy részében a naplózás ki volt kapcsolva.");
+        // Consecutive sessions pair across a restart: the sign-out/sign-in gap is an ordinary break.
+        string PairKey(LockEvent e) => sequential ? "" : e.SessionKey;
         var pending = new Dictionary<string, LockEvent>();
         var pairs = new List<BreakPair>();
         foreach (var e in list)
         {
-            if (e.IsLock) pending[e.SessionKey] = e;
-            else if (pending.Remove(e.SessionKey, out var locked) && e.Timestamp > locked.Timestamp)
+            if (e.IsLock) pending[PairKey(e)] = e;
+            else if (pending.Remove(PairKey(e), out var locked) && e.Timestamp > locked.Timestamp)
                 pairs.Add(new BreakPair(locked, e));
         }
         var expected = WorkDayClock.At(settings.ExpectedLunch < settings.DayStart ? date.AddDays(1) : date,

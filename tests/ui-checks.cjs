@@ -179,5 +179,16 @@ const {parseHTML} = require('linkedom');
     assert.match(document.body.textContent,/Első kapcsolódás/);assert.match(document.body.textContent,/Utolsó leválasztás/);
     assert.match(document.body.textContent,/Munkamenet csatlakoztatása/);
   });
+  await check('Sign-in and shutdown endpoints have accurate localized labels',async()=>{
+    const day=state.days[0];day.hasSessionEvents=false;day.hasSignInEvents=true;day.firstFromSession=false;day.lastFromSession=false;
+    day.firstFromSignIn=true;day.lastFromSignOut=true;day.lastFromActivity=false;
+    day.events=[{time:time('14:46','14:46:50'),eventId:4624,label:'Bejelentkezés',isLock:false},
+      {time:time('17:33','17:33:07'),eventId:4647,label:'Kijelentkezés / leállítás',isLock:true}];
+    state.settings.language='en';await click('[data-refresh]');
+    assert.match(document.body.textContent,/First sign-in/);assert.match(document.body.textContent,/Sign-out \/ shutdown/);
+    assert.match(document.body.textContent,/Sign-in/);assert.match(document.body.textContent,/the new session continues the same day/);
+    state.settings.language='hu';await click('[data-refresh]');
+    assert.match(document.body.textContent,/Első bejelentkezés/);assert.match(document.body.textContent,/Kijelentkezés \/ leállítás/);
+  });
   console.log(`${count} DOM/bridge checks passed (no browser, native clipboard, log, or user workbook access).`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

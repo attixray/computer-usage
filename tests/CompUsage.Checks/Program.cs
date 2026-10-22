@@ -108,6 +108,62 @@ Check("A session-only day supports the existing break threshold without fabricat
     Equal(4779,day.Last!.EventId); entries[2] = entries[2] with {Timestamp=entries[2].Timestamp.AddSeconds(1)};
     Equal(2,Report(entries).Sections.Count);
 });
+LockEvent SignIn(int day, string time, string logon) => new(id++, At(day, time), 4624, "S-1-5-21-1", "Test", "LOCAL", "", logon);
+LockEvent SignOut(int day, string time, string logon) => new(id++, At(day, time), 4647, "S-1-5-21-1", "Test", "LOCAL", "", logon);
+Check("Sign-in XML keeps only interactive logons, and sign-out ends work", () =>
+{
+    const string xml = "<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\"><System><EventID>4624</EventID><EventRecordID>44</EventRecordID><TimeCreated SystemTime=\"2026-10-21T12:46:50.166Z\"/></System><EventData><Data Name=\"TargetUserSid\">S-1-5-21-1</Data><Data Name=\"TargetUserName\">Test</Data><Data Name=\"TargetDomainName\">LOCAL</Data><Data Name=\"TargetLogonId\">0xe1ca5</Data><Data Name=\"LogonType\">11</Data></EventData></Event>";
+    var entry = EventXmlParser.Parse(xml)!;
+    Equal("0xe1ca5", entry.LogonId); Equal("", entry.SessionId); True(!entry.IsLock && entry.IsSignInOrOut && entry.IsWorkTransition);
+    True(EventXmlParser.Parse(xml.Replace(">11<", ">2<")) is not null); True(EventXmlParser.Parse(xml.Replace(">11<", ">10<")) is not null);
+    True(EventXmlParser.Parse(xml.Replace(">11<", ">3<")) is null); True(EventXmlParser.Parse(xml.Replace(">11<", ">7<")) is null);
+    var signOut = EventXmlParser.Parse(xml.Replace("4624", "4647").Replace("<Data Name=\"LogonType\">11</Data>", ""))!;
+    True(signOut.IsLock && signOut.IsSignInOrOut); Equal("0xe1ca5", signOut.LogonId);
+});
+Check("Credential checks at unlock are not sign-ins; the session's own and the current logon are", () =>
+{
+    var session = SignIn(22, "08:21:27", "0x1a02fd"); var elevated = SignIn(22, "08:21:27", "0x1a017a");
+    var unlockCheck = SignIn(22, "08:45:15", "0x1297358"); var locked = Event(22, "08:32:27", true) with { LogonId = "0x1A02FD" };
+    var kept = SessionEvents.DropTransientSignIns([session, elevated, locked, unlockCheck], null);
+    Equal(2, kept.Count); True(kept.Contains(session) && kept.Contains(locked));
+    kept = SessionEvents.DropTransientSignIns([session, elevated, unlockCheck], "0x1A02FD");
+    Equal(1, kept.Count); Equal(session, kept[0]);
+});
+Check("A mid-day restart continues the day from the new sign-in and a shutdown closes it", () =>
+{
+    LockEvent[] entries = [Event(16,"08:24:09",false) with {EventId=4778,SessionId="",LogonId="0x2a1acf"},
+        Event(16,"11:27:34",true,"2") with {LogonId="0x2a1acf"}, Event(16,"11:44:22",false,"2") with {LogonId="0x2a1acf"},
+        SignOut(16,"14:46:16","0x2a1acf"), SignIn(16,"14:46:50","0xe1ca5"), SignOut(16,"17:33:07","0xe1ca5")];
+    var day = Report(entries);
+    True(!day.Incomplete); Equal(4778, day.First!.EventId); Equal(4647, day.Last!.EventId); Equal(At(16,"17:33:07"), day.Last.Timestamp);
+    Equal(2, day.Pairs.Count); Equal(4624, day.Pairs[1].Unlock.EventId); Equal(4647, day.Pairs[1].Lock.EventId);
+    Equal(2, day.Sections.Count); Equal(At(16,"11:44:22"), day.Sections[1].From); Equal(At(16,"17:33:07"), day.Sections[1].To);
+    entries[4] = entries[4] with { Timestamp = At(16,"14:56:17") };
+    Equal(3, Report(entries).Sections.Count);
+});
+Check("Real lock/unlock records win over sign-in/sign-out, and a sign-out after a lock is ignored", () =>
+{
+    var day = Report([SignIn(16,"08:00:00","0x1"), Event(16,"08:00:02",false), Event(16,"12:00",true), Event(16,"12:30",false),
+        Event(16,"17:00",true), SignOut(16,"17:20","0x1")]);
+    True(!day.Incomplete); Equal(4801, day.First!.EventId); Equal(4800, day.Last!.EventId); Equal(6, day.Events.Count);
+    Equal(At(16,"08:00:02"), day.Sections[0].From); Equal(At(16,"17:00"), day.Sections[^1].To);
+});
+Check("Disconnecting a locked console session before an RDP reconnect does not repeat the lock", () =>
+{
+    var day = Report([Event(16,"11:14:23",false), Event(16,"18:37:37",true), Event(16,"19:33:52",true) with {EventId=4779,SessionId=""},
+        Event(16,"19:33:53",false) with {EventId=4778,SessionId=""}, Event(16,"19:33:54",false),
+        Event(16,"21:25:28",true) with {EventId=4779,SessionId=""}, Event(16,"21:25:29",true)]);
+    True(!day.Incomplete); Equal(2, day.Sections.Count); Equal(At(16,"18:37:37"), day.Sections[0].To);
+    Equal(At(16,"19:33:54"), day.Sections[1].From); Equal(At(16,"21:25:29"), day.Sections[1].To);
+});
+Check("Today's sign-in after boot starts work, while interleaved sessions still need review", () =>
+{
+    var today = Report([SignIn(19,"08:21:27","0x1"), Event(19,"08:32:27",true), Event(19,"08:45:15",false)]);
+    True(today.Ongoing && !today.Incomplete); Equal(4624, today.First!.EventId); Equal(At(19,"08:21:27"), today.Sections[0].From);
+    True(Report([SignIn(16,"08:00","0x2"), Event(16,"08:30",false), Event(16,"12:00",true), SignOut(16,"17:00","0x2")]).Incomplete);
+    True(Report([Event(16,"08:00",false), Event(16,"10:00",true), SignIn(16,"10:05","0x2"), SignOut(16,"11:00","0x2"),
+        Event(16,"11:05",false), Event(16,"17:00",true)]).Incomplete);
+});
 
 Check("Activity tracking defaults off and validates its optional time source", () =>
 {
