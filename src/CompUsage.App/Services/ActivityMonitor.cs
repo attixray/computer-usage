@@ -23,16 +23,33 @@ public static class ActivityMonitor
         catch (WaitHandleCannotBeOpenedException) { return false; }
     }
 
+    private static (DateTime Stamp, AppSettings? Value) savedSettings;
+
+    // The monitor only reads the app's settings; the UI stays the only writer of state.json.
+    public static AppSettings SavedSettings()
+    {
+        try
+        {
+            var stamp = File.GetLastWriteTimeUtc(LocalStore.FilePath);
+            if (savedSettings.Value is null || stamp != savedSettings.Stamp) savedSettings = (stamp, new LocalStore().Load().Settings);
+            return savedSettings.Value;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return savedSettings.Value ?? new(); }
+    }
+
+    // Activity tracking is opt-in; break prompts are on by default. Either one keeps the monitor running.
+    public static bool Wanted() => Journal.Configuration().Enabled || SavedSettings().BreakPrompt;
+
     public static void Start()
     {
-        if (!Journal.Configuration().Enabled || IsRunning()) return;
+        if (!Wanted() || IsRunning()) return;
         Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { ArgumentList = { "--activity-monitor" }, UseShellExecute = false, CreateNoWindow = true });
     }
 
     public static async Task StartAndWaitAsync()
     {
         Start();
-        for (var attempt = 0; attempt < 30 && Journal.Configuration().Enabled; attempt++)
+        for (var attempt = 0; attempt < 30 && Wanted(); attempt++)
         {
             var state = Journal.Load(SessionId);
             if (IsRunning() && state.StoppedAt is null && DateTimeOffset.UtcNow - state.HeartbeatAt < TimeSpan.FromSeconds(20)) return;
@@ -63,7 +80,9 @@ public static class ActivityMonitor
     public static int Run(string? testDirectory = null)
     {
         var journal = testDirectory is null ? Journal : new ActivityJournal(testDirectory);
-        try { if (!journal.Configuration().Enabled) return 0; }
+        // Checks run with prompts off so they never show a window or touch the user's settings.
+        Func<AppSettings> settings = testDirectory is null ? SavedSettings : () => new AppSettings { BreakPrompt = false };
+        try { if (!journal.Configuration().Enabled && !settings().BreakPrompt) return 0; }
         catch { return 6; }
         using var mutex = new Mutex(true, MutexName(testDirectory), out var created);
         if (!created) return 0;
@@ -71,7 +90,7 @@ public static class ActivityMonitor
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         try
         {
-            using var worker = new Worker(app, journal, SessionId, stop, WindowTitle(testDirectory));
+            using var worker = new Worker(app, journal, SessionId, stop, WindowTitle(testDirectory), settings, testDirectory is null);
             app.SessionEnding += (_, _) => app.Shutdown();
             return app.Run();
         }
@@ -148,19 +167,37 @@ public static class ActivityMonitor
         private readonly EventWaitHandle stop;
         private readonly DispatcherTimer timer;
         private readonly HwndSource window;
+        private readonly Func<AppSettings> settings;
+        private readonly TrayIcon? tray;
+        private BreakPromptWindow? prompt;
         private DateTimeOffset? sampledAt;
         private bool locked;
         private bool registered;
         private int ticks;
 
-        public Worker(Application app, ActivityJournal journal, string session, EventWaitHandle stop, string title)
+        public Worker(Application app, ActivityJournal journal, string session, EventWaitHandle stop, string title,
+            Func<AppSettings> settings, bool interactive)
         {
-            this.app = app; this.journal = journal; this.stop = stop;
+            this.app = app; this.journal = journal; this.stop = stop; this.settings = settings;
+            // The newest record of any session tells when this computer was last in use before this sign-in.
+            var previous = journal.ReadAll().MaxBy(s => s.HeartbeatAt);
+            var since = previous is null || previous.HeartbeatAt == default ? (DateTimeOffset?)null : previous.LockedAt ?? previous.StoppedAt ?? previous.HeartbeatAt;
             state = journal.Load(session);
-            state.StartedAt = DateTimeOffset.UtcNow; state.StoppedAt = null; state.LastInputAt = null;
+            state.StartedAt = DateTimeOffset.UtcNow; state.StoppedAt = null; state.LastInputAt = null; state.LockedAt = null;
             window = new HwndSource(new HwndSourceParameters(title) { Width = 0, Height = 0, WindowStyle = 0 });
             window.AddHook(Messages);
-            locked = !IsInteractive(int.Parse(session, CultureInfo.InvariantCulture));
+            var id = int.Parse(session, CultureInfo.InvariantCulture);
+            locked = !IsInteractive(id);
+            if (interactive)
+            {
+                tray = new TrayIcon(window, () => settings().Language == "en"
+                    ? ("CompUsage – work log", "Open CompUsage", "Stop background monitor")
+                    : ("CompUsage – munkaidőnapló", "CompUsage megnyitása", "Háttérfigyelő leállítása"), OpenApp, app.Shutdown);
+                // A sign-in shortly after a restart or sign-out ends a break as well; started later, the monitor stays quiet.
+                if (since is { } from && LogonTime(id) is { } logon && from < logon && DateTimeOffset.UtcNow - logon < TimeSpan.FromMinutes(5))
+                    new DispatcherTimer(TimeSpan.FromSeconds(3), DispatcherPriority.Normal, (sender, _) =>
+                    { ((DispatcherTimer)sender!).Stop(); if (!locked) Prompt(from, logon); }, app.Dispatcher).Start();
+            }
             timer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => Tick(), app.Dispatcher);
             Tick();
         }
@@ -176,8 +213,10 @@ public static class ActivityMonitor
                     if (registered) locked = !IsInteractive(int.Parse(state.SessionId, CultureInfo.InvariantCulture));
                 }
                 state.Enabled = journal.Configuration().Enabled;
-                if (!state.Enabled) { sampledAt = null; state.LastInputAt = null; app.Shutdown(); return; }
-                if (!locked && IsInteractive(int.Parse(state.SessionId, CultureInfo.InvariantCulture))) Sample();
+                if (!state.Enabled) { sampledAt = null; state.LastInputAt = null; }
+                if (!state.Enabled && !settings().BreakPrompt) { app.Shutdown(); return; }
+                // Input times are only sampled when activity tracking is on; prompts need session notifications alone.
+                if (state.Enabled && !locked && IsInteractive(int.Parse(state.SessionId, CultureInfo.InvariantCulture))) Sample();
                 state.Error = registered ? null : "Session notifications are unavailable; retrying.";
                 if (ticks++ % 5 == 0) Save();
             }
@@ -201,19 +240,54 @@ public static class ActivityMonitor
             {
                 if (wParam.ToInt32() == 7)
                 {
-                    locked = true;
+                    locked = true; state.LockedAt ??= DateTimeOffset.UtcNow;
                     if (state.Enabled && journal.Configuration().Enabled)
                         state.Locks.Add(ActivityHistory.Capture(DateTimeOffset.UtcNow, state.LastInputAt, sampledAt, state.SessionId));
                     sampledAt = null; Save(true);
                 }
                 else if (wParam.ToInt32() is 8 or 1 or 3)
-                { locked = false; sampledAt = null; state.LastInputAt = null; Tick(); }
+                {
+                    var from = state.LockedAt;
+                    locked = false; sampledAt = null; state.LastInputAt = null; state.LockedAt = null; Tick(); Save();
+                    if (from is { } start) { var to = DateTimeOffset.UtcNow; app.Dispatcher.BeginInvoke(() => Prompt(start, to)); }
+                }
                 else if (wParam.ToInt32() is 2 or 4)
-                { locked = true; sampledAt = null; state.LastInputAt = null; Save(); }
+                { locked = true; state.LockedAt ??= DateTimeOffset.UtcNow; sampledAt = null; state.LastInputAt = null; Save(); }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
             { state.Error = ex.Message; sampledAt = null; }
             return IntPtr.Zero;
+        }
+
+        private void Prompt(DateTimeOffset from, DateTimeOffset to)
+        {
+            try
+            {
+                var current = settings();
+                var zone = TimeZoneInfo.Local;
+                if (!BreakReasons.ShouldPrompt(from, to, current, zone)) return;
+                var day = WorkDayClock.GetDate(from, current.DayStart, zone);
+                var lunchNoted = state.Breaks.Any(b => b.Reason == BreakReasons.Lunch && WorkDayClock.GetDate(b.LockedAt, current.DayStart, zone) == day);
+                prompt?.Close();
+                prompt = new BreakPromptWindow(from, to, BreakReasons.Suggest(from, to, current, zone, lunchNoted), current, (reason, text, automatic) =>
+                {
+                    state.Breaks.RemoveAll(b => b.UnlockedAt == to);
+                    state.Breaks.Add(new BreakNote(from, to, reason, BreakReasons.Parse(BreakReasons.Encode(reason, text)).Text, automatic));
+                    Save(true);
+                });
+                prompt.Closed += (sender, _) => { if (ReferenceEquals(sender, prompt)) prompt = null; };
+                prompt.Start();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException
+                or ArgumentException or InvalidOperationException)
+            { state.Error = ex.Message; }
+        }
+
+        private static void OpenApp()
+        {
+            // The app's single-instance handoff brings an already open window to the front.
+            try { Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false })?.Dispose(); }
+            catch (System.ComponentModel.Win32Exception) { }
         }
 
         private void Save(bool history = false)
@@ -226,6 +300,8 @@ public static class ActivityMonitor
         public void Dispose()
         {
             timer.Stop();
+            prompt?.Close();
+            tray?.Dispose();
             if (registered) WTSUnRegisterSessionNotification(window.Handle);
             window.Dispose();
             state.StoppedAt = DateTimeOffset.UtcNow;
@@ -243,6 +319,18 @@ public static class ActivityMonitor
             // WTSINFOEXW's union is aligned to eight bytes on x64; only its fixed header is needed.
             return bytes >= 20 && Marshal.ReadInt32(buffer) == 1 && Marshal.ReadInt32(buffer, 12) == 0
                 && Marshal.ReadInt32(buffer, 16) == 1;
+        }
+        finally { WTSFreeMemory(buffer); }
+    }
+
+    private static DateTimeOffset? LogonTime(int session)
+    {
+        if (!WTSQuerySessionInformation(IntPtr.Zero, session, 25, out var buffer, out var bytes)) return null;
+        try
+        {
+            // WTSINFOEX_LEVEL1_W.LogonTime follows the fixed-size name fields, aligned to eight bytes.
+            var value = bytes >= 176 ? Marshal.ReadInt64(buffer, 168) : 0;
+            return value > 0 ? DateTimeOffset.FromFileTime(value) : null;
         }
         finally { WTSFreeMemory(buffer); }
     }

@@ -14,7 +14,10 @@ public sealed class ActivitySession
     public DateTimeOffset? LastInputAt { get; set; }
     public bool Enabled { get; set; }
     public string? Error { get; set; }
+    // Start of the current break as seen by the monitor; it survives a restart so the next sign-in can ask about it.
+    public DateTimeOffset? LockedAt { get; set; }
     public List<ActivityLock> Locks { get; set; } = [];
+    public List<BreakNote> Breaks { get; set; } = [];
 }
 
 public static class ActivityHistory
@@ -81,7 +84,7 @@ public sealed class ActivityJournal(string directory)
         var history = Read<ActivitySession>(SessionPath(session)) ?? new() { SessionId = session };
         var status = Read<ActivitySession>(Path.Combine(directory, $"status-{session}.json"));
         if (status is null || status.HeartbeatAt < history.HeartbeatAt) return history;
-        status.Locks = history.Locks;
+        status.Locks = history.Locks; status.Breaks = history.Breaks;
         return status;
     }
     public IReadOnlyList<ActivitySession> ReadAll() => !Directory.Exists(directory) ? [] :
@@ -94,11 +97,12 @@ public sealed class ActivityJournal(string directory)
         session.HeartbeatAt = now;
         // Keep the five-second health update small instead of rewriting sixty days of history each time.
         Write($"status-{session.SessionId}.json", new { session.SessionId, session.StartedAt, session.HeartbeatAt,
-            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error });
+            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt });
     }
     public void Save(ActivitySession session, DateTimeOffset now)
     {
         session.Locks.RemoveAll(r => r.LockedAt < now.AddDays(-61));
+        session.Breaks.RemoveAll(b => b.UnlockedAt < now.AddDays(-61));
         Write(Path.GetFileName(SessionPath(session.SessionId)), session);
     }
     private string SessionPath(string session)

@@ -6,6 +6,10 @@ public sealed record BreakPair(LockEvent Lock, LockEvent Unlock)
 {
     public string Id => $"{Lock.RecordId}:{Lock.Timestamp.UtcTicks}:{Unlock.RecordId}:{Unlock.Timestamp.UtcTicks}";
     public TimeSpan Duration => Unlock.Timestamp - Lock.WorkTimestamp;
+    public string? Reason { get; init; }
+    public string ReasonText { get; init; } = "";
+    public bool ReasonManual { get; init; }
+    public bool ReasonAutomatic { get; init; }
 }
 public sealed record WorkInterval(DateOnly Date, DateTimeOffset From, DateTimeOffset To, bool Open = false)
 {
@@ -43,13 +47,16 @@ public static class WorkReports
         IReadOnlyDictionary<string, string> lunches, DateTimeOffset now, TimeZoneInfo zone,
         IEnumerable<LoggingGap>? gaps = null, IEnumerable<ActivityLock>? activity = null,
         IReadOnlyDictionary<string, string>? meetings = null,
-        IReadOnlyDictionary<string, string>? comments = null)
+        IReadOnlyDictionary<string, string>? comments = null,
+        IEnumerable<BreakNote>? breaks = null, IReadOnlyDictionary<string, string>? reasons = null)
     {
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
         var firstDate = today.AddDays(1 - settings.HistoryDays);
         var meetingChoices = meetings ?? new Dictionary<string, string>();
         var notes = comments ?? new Dictionary<string, string>();
+        var breakNotes = (breaks ?? []).ToArray();
+        var reasonChoices = reasons ?? new Dictionary<string, string>();
         var raw = SessionEvents.ResolveSessions(SessionEvents.MergeSleeps(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
             .DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp))).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId));
         var transitions = SessionEvents.WorkTransitions(raw);
@@ -60,13 +67,14 @@ public static class WorkReports
         return ActivityHistory.Apply(transitions, activity ?? [], settings, zone)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
-            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, meetingChoices, now, zone, gaps ?? []))
+            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices))
             .Select(day => day with { Sections = day.Sections.Select(s => s with { Comment = notes.GetValueOrDefault(s.Id, "") }).ToArray() }).ToArray();
     }
 
     private static WorkReport BuildDay(DateOnly date, LockEvent[] list, LockEvent[] raw, AppSettings settings,
         IReadOnlyDictionary<string, string> lunches, IReadOnlyDictionary<string, string> meetings,
-        DateTimeOffset now, TimeZoneInfo zone, IEnumerable<LoggingGap> gaps)
+        DateTimeOffset now, TimeZoneInfo zone, IEnumerable<LoggingGap> gaps,
+        IReadOnlyList<BreakNote> breaks, IReadOnlyDictionary<string, string> reasons)
     {
         var ongoing = date == WorkDayClock.GetDate(now, settings.DayStart, zone);
         var issues = new List<string>();
@@ -89,7 +97,7 @@ public static class WorkReports
         {
             if (e.IsLock) pending[PairKey(e)] = e;
             else if (pending.Remove(PairKey(e), out var locked) && e.Timestamp > locked.Timestamp)
-                pairs.Add(new BreakPair(locked, e));
+                pairs.Add(WithReason(new BreakPair(locked, e), breaks, reasons));
         }
         var expected = WorkDayClock.At(settings.ExpectedLunch < settings.DayStart ? date.AddDays(1) : date,
             settings.ExpectedLunch, zone);
@@ -98,14 +106,19 @@ public static class WorkReports
         var explicitLunch = manual ? pairs.Find(p => p.Id == chosen) : null;
         var manualMeeting = settings.IgnoreDailyMeeting && meetings.ContainsKey(key);
         var chosenMeeting = meetings.GetValueOrDefault(key);
+        // A pair answered as standup is the daily meeting; a pair answered otherwise is not a meeting candidate.
         var meeting = !settings.IgnoreDailyMeeting ? null : manualMeeting
             ? pairs.Find(p => p.Id == chosenMeeting && p.Id != explicitLunch?.Id)
-            : pairs.Where(p => p.Id != explicitLunch?.Id && p.Duration > TimeSpan.Zero
+            : pairs.Where(p => p.Id != explicitLunch?.Id && p.Reason == BreakReasons.Standup).OrderBy(p => p.Lock.WorkTimestamp).FirstOrDefault()
+                ?? pairs.Where(p => p.Id != explicitLunch?.Id && p.Reason is null && p.Duration > TimeSpan.Zero
                     && p.Duration.TotalMinutes <= settings.MaximumMeetingMinutes && IsMeetingStart(p.Lock.WorkTimestamp, settings, zone))
                 .OrderBy(p => MeetingDistance(p.Lock.WorkTimestamp, settings, zone)).ThenBy(p => p.Lock.WorkTimestamp).FirstOrDefault();
         if (manualMeeting && chosenMeeting != "none" && meeting is null)
             issues.Add("A korábban választott meetingpár már nem található vagy ebédként van kijelölve; válaszd ki újra.");
-        var guess = pairs.Where(p => p.Id != meeting?.Id && p.Duration.TotalMinutes >= settings.MinimumLunchMinutes && p.Duration.TotalMinutes <= 120
+        // An answered lunch beats the clock-based guess; pairs answered with another reason are never guessed as lunch.
+        var guess = pairs.Where(p => p.Id != meeting?.Id && p.Reason == BreakReasons.Lunch)
+                .OrderBy(p => Math.Abs((p.Lock.WorkTimestamp - expected).Ticks)).ThenBy(p => p.Lock.WorkTimestamp).FirstOrDefault()
+            ?? pairs.Where(p => p.Id != meeting?.Id && p.Reason is null && p.Duration.TotalMinutes >= settings.MinimumLunchMinutes && p.Duration.TotalMinutes <= 120
                 && Math.Abs((p.Lock.WorkTimestamp - expected).TotalMinutes) <= 120)
             .OrderBy(p => Math.Abs((p.Lock.WorkTimestamp - expected).Ticks)).ThenBy(p => p.Lock.WorkTimestamp).FirstOrDefault();
         var lunch = manual ? explicitLunch : guess;
@@ -118,7 +131,8 @@ public static class WorkReports
             var to = list[^1].IsLock ? list[^1].WorkTimestamp : now;
             var from = first.Timestamp;
             foreach (var gap in pairs.Where(p => p.Lock.WorkTimestamp >= from && p.Unlock.Timestamp <= to
-                         && (p.Id == lunch?.Id || p.Id != meeting?.Id && p.Duration.TotalMinutes > settings.SplitBreakMinutes)).OrderBy(p => p.Lock.WorkTimestamp))
+                         && (p.Id == lunch?.Id || p.Id != meeting?.Id && !BreakReasons.CountsAsWork(p.Reason)
+                             && p.Duration.TotalMinutes > settings.SplitBreakMinutes)).OrderBy(p => p.Lock.WorkTimestamp))
             {
                 if (gap.Lock.WorkTimestamp > from) sections.Add(new(date, from, gap.Lock.WorkTimestamp));
                 from = gap.Unlock.Timestamp;
@@ -129,7 +143,18 @@ public static class WorkReports
         { Meeting = meeting, ManualMeeting = manualMeeting, NoMeeting = settings.IgnoreDailyMeeting && chosenMeeting == "none" };
     }
 
-    private static bool IsMeetingStart(DateTimeOffset value, AppSettings settings, TimeZoneInfo zone)
+    private static BreakPair WithReason(BreakPair pair, IReadOnlyList<BreakNote> breaks, IReadOnlyDictionary<string, string> reasons)
+    {
+        if (reasons.TryGetValue(pair.Id, out var chosen))
+        {
+            var (reason, text) = BreakReasons.Parse(chosen);
+            return pair with { Reason = reason, ReasonText = text, ReasonManual = true };
+        }
+        return BreakReasons.Match(breaks, pair) is { } note && BreakReasons.Codes.Contains(note.Reason)
+            ? pair with { Reason = note.Reason, ReasonText = note.Text, ReasonAutomatic = note.Automatic } : pair;
+    }
+
+    internal static bool IsMeetingStart(DateTimeOffset value, AppSettings settings, TimeZoneInfo zone)
     {
         var time = TimeOnly.FromDateTime(TimeZoneInfo.ConvertTime(value, zone).DateTime);
         return settings.MeetingStartFrom <= settings.MeetingStartUntil

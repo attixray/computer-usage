@@ -23,13 +23,15 @@ A local Windows work-log application based on the current user's lock and unlock
 - A flat work-log-sheet-and-clock app icon is included in the executable, native window, interface and installer.
 - Launching again from the Start menu or shortcut brings the existing window to the foreground and restores it when minimized.
 - Optional background last-input tracking, disabled by default, with selectable lock-time or last-input endpoints for display, copying and Excel.
+- Break-reason prompt, enabled by default: after a long break a small window in the bottom-right corner asks whether it was a stand-up, lunch, coffee break, meeting or another break. Stand-ups and meetings count as work.
+- A notification-area icon opens the app while the background process or the app runs.
 - `.xlsx` Details preview, append, optional completion of an unfinished row, backup, and detection of changes after preview.
 
 ## Install and run
 
 Run the versioned `CompUsage-<version>-Setup-x64.exe`, or extract the entire portable ZIP and run `CompUsage.exe`. Keep the portable files together. The .NET runtime is included. The installer adds the Microsoft WebView2 Runtime if missing; that step requires an internet connection. On Windows 11 it is normally already present.
 
-Setup registers a per-user Windows sign-in entry for the background collector and invokes it independently of the optional UI launch. Tracking defaults to disabled, so the collector exits without sampling until enabled in Settings → Time rules. Once enabled, it runs immediately, survives closing the window and starts again at subsequent sign-ins without opening the app. Disabling tracking stops it; the startup entry remains but exits immediately while disabled. Upgrade and uninstall stop the collector before replacing/removing its files; uninstall removes the startup entry and keeps saved data. The portable build can collect after enabling it in Settings, but Setup is needed to register automatic startup.
+Setup registers a per-user Windows sign-in entry for the background process and invokes it independently of the optional UI launch. It runs while break prompts (Settings → Breaks, on by default) or activity tracking (Settings → Time rules, off by default) are enabled: it survives closing the window and starts again at subsequent sign-ins without opening the app. With tracking off it only listens for lock/unlock notifications and samples no input. Disabling both stops it; the startup entry remains but exits immediately while both are disabled. Upgrade and uninstall stop the collector before replacing/removing its files; uninstall removes the startup entry and keeps saved data. The portable build can collect after enabling it in Settings, but Setup is needed to register automatic startup.
 
 The application runs as the current user. Opening the app and refreshing never request UAC or start an elevated reader. If the Security log cannot be read, the app keeps showing saved data with a permission warning. An inaccessible audit-policy query is shown as unknown rather than disabled, and ordinary settings saves preserve that unknown state.
 
@@ -71,6 +73,20 @@ Other worksheets and unrelated workbook parts are preserved. Existing unfinished
 
 Before replacement, the app checks the file's content hash against the preview and requires exclusive access. A backup named `<workbook>.backup-<timestamp>-<id>.xlsx` is created beside the original by Windows' atomic file-replacement operation. Some network shares deny that operation even with full control; the app then re-checks that the original still matches the preview, copies it to the backup and replaces it with a same-folder rename in one step. A workbook changed since the preview is never overwritten.
 
+## Break reasons
+
+After an unlock, reconnect or sign-in, the background process shows a small, topmost prompt in the bottom-right corner of the work area if the break just ended was longer than the split threshold (10 minutes) and began on the same workday. The first unlock of a day therefore never asks. A sign-in within five minutes after a restart or sign-out also asks: the break starts at the previous lock, or at the previous background process's last stop or heartbeat. The prompt does not take the keyboard focus.
+
+It offers Stand-up meeting, Lunch break, Coffee break, Meeting and Other break. The most likely reason is highlighted:
+
+- Stand-up: the break starts within the daily meeting window and lasts at most the meeting maximum (09:25–09:40, 20 minutes).
+- Lunch: the break meets the lunch rules (minimum length, at most two hours, starting within two hours of the expected lunch time) and no lunch was answered that day.
+- Coffee break: at most the coffee maximum (25 minutes, Settings → Breaks); otherwise Meeting.
+
+Choosing a reason saves it and closes the prompt at once. Other break opens an optional description field, saved with Enter or Save. A visible countdown closes the prompt after the configured time (40 seconds); it pauses while the pointer is over the prompt or it is active, so typing a description is never cut off. On timeout only a suggested stand-up or lunch is saved, marked as automatic; any other suggestion saves nothing. The close button or Esc skips the question.
+
+Stand-ups and meetings count as work: they never split a work section, even when Ignore daily meeting is off, and are never guessed as lunch. With Ignore daily meeting on, an answered stand-up is preferred as the day's meeting. An answered lunch becomes the day's lunch unless a lunch pair was selected manually. Coffee and other breaks are ordinary breaks and are not guessed as lunch. Answers match a lock/unlock pair when the unlock is within two minutes and the lock within ten minutes of the prompt's times. The Ok column of the lock/unlock pairs table shows the source of each answer and changes it, including the description; a manual choice, including "—" for no reason, overrides the prompt's answer and can be reset.
+
 ## Optional activity tracking
 
 The unelevated `--activity-monitor` process samples the current Windows session's `GetLastInputInfo` about once per second while unlocked. On a Windows session-lock notification it saves the latest sample. It never captures keys, text, application names or screenshots, and never starts the elevated event-log helper. The main window shows collector health and automatic-start registration in Time rules; lock details show the last observed input and idle duration. A stopped collector can be restarted from the status row.
@@ -87,7 +103,9 @@ Manual daily meeting choices are stored alongside lunch choices in `state.json`,
 
 Section comments are stored in `SectionComments` in the same file, keyed by work date and exact UTC section start, with 60-day retention. Closing a section or adjusting its end does not change that key. Changing rules can merge/remove starts: comments for absent starts stay retained but are not silently assigned to another section; restoring the original section restores its comment. Emptying the editor removes the saved note. Comments are limited to Excel's 32,767 UTF-16 characters and valid XML text. Refresh/copy/export wait for pending saves, and close waits for the comment queue. A failed save retains its draft for retry; closing after a failure offers an explicit discard choice.
 
-The optional monitor uses `%LocalAppData%\CompUsage\Activity\configuration.json`, separate session journals and small heartbeat files. The UI never writes the monitor's history, and the monitor never writes UI state. These files stay local and are retained on uninstall.
+The optional monitor uses `%LocalAppData%\CompUsage\Activity\configuration.json`, separate session journals and small heartbeat files. Prompt answers are kept in the session journals for 61 days; reasons changed in the app are stored in `BreakReasons` in `state.json`, keyed by pair. The UI never writes the monitor's history, and the monitor only reads the settings from `state.json`, never writing UI state. These files stay local and are retained on uninstall.
+
+The background process owns the notification-area icon: a click or Open starts the app or brings its window to the front, and Stop background monitor ends the process until the next sign-in or app start. While no background process runs, the open app window shows its own icon instead.
 
 ## Build
 
@@ -129,7 +147,7 @@ dotnet run --project src/CompUsage.App
 
 `dotnet run --project tests/CompUsage.WindowsChecks` checks read-only ACL construction, read denial without elevation, explicit write escalation, a real non-elevating Security-log read, and native titlebar API acceptance on a hidden window. It never grants permissions, changes auditing or opens UAC. The actual one-time permission change remains an interactive Windows check.
 
-`CompUsage.exe --verify-activity-monitor` checks disabled-by-default startup, an isolated collector process and heartbeat, duplicate prevention, a synthetic lock notification, graceful stop, and disabled subsequent startup. It uses a temporary journal, does not register startup, change auditing or lock the desktop, and cleans up after itself. The normal build runs it after publishing. A physical lock/unlock cycle and Windows sign-in remain manual end-to-end checks.
+`CompUsage.exe --verify-activity-monitor` checks, with break prompts off, disabled-by-default startup, an isolated collector process and heartbeat, duplicate prevention, a synthetic lock notification, graceful stop, and disabled subsequent startup. It uses a temporary journal, does not register startup, change auditing or lock the desktop, and cleans up after itself. The normal build runs it after publishing. A physical lock/unlock cycle and Windows sign-in remain manual end-to-end checks.
 
 The build also runs `tests/installer-monitor-check.ps1`: it compiles the actual NSIS stop macro with a private scope and verifies graceful shutdown of an isolated background collector. It also round-trips the production message strings through a compiled Unicode installer to check Hungarian accents. It does not install the app or change startup registration. NSIS is invoked with `/INPUTCHARSET UTF8`; the main script also has a UTF-8 BOM for direct compiler invocation.
 

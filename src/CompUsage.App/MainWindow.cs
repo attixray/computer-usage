@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using CompUsage.App.Services;
 using CompUsage.Core;
@@ -29,6 +30,8 @@ public sealed class MainWindow : Window
     private object? workbookInfo;
     private ExcelDisplay display;
     private IReadOnlyList<ActivityLock> activityLocks = [];
+    private IReadOnlyList<BreakNote> breakNotes = [];
+    private TrayIcon? tray;
     private object? activityInfo;
     private readonly WindowTheme windowTheme;
     private bool readAccessRequired;
@@ -60,6 +63,7 @@ public sealed class MainWindow : Window
         if (state.Settings.RememberView && state.Maximized) WindowState = WindowState.Maximized;
         Content = view;
         Loaded += async (_, _) => await InitializeAsync();
+        SourceInitialized += (_, _) => UpdateTray();
         // While the window is active, ask the UI for a silent refresh on activation and once a minute.
         var autoRefresh = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
         autoRefresh.Tick += (_, _) => RequestAutoRefresh();
@@ -93,6 +97,7 @@ public sealed class MainWindow : Window
                 store.Save(state);
             }
             catch (Exception ex) { MessageBox.Show(ex.Message, state.Settings.Language == "en" ? "Could not save the view" : "A nézet mentése nem sikerült"); }
+            tray?.Dispose(); tray = null;
             windowTheme.Dispose(); broker.Dispose(); view.Dispose();
         };
     }
@@ -159,26 +164,41 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports() => WorkReports.Build(state.Events, state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons);
+
+    // The background monitor owns the notification-area icon; the window shows its own only while no monitor runs.
+    private void UpdateTray()
+    {
+        if (closing) return;
+        var handle = new WindowInteropHelper(this).Handle;
+        var wanted = handle != IntPtr.Zero && !ActivityMonitor.IsRunning();
+        if (wanted && tray is null)
+            tray = new TrayIcon(HwndSource.FromHwnd(handle), () => state.Settings.Language == "en"
+                ? ("CompUsage – work log", "Open CompUsage", "Exit")
+                : ("CompUsage – munkaidőnapló", "CompUsage megnyitása", "Kilépés"), () => SingleInstance.BringToFront(this), Close);
+        else if (!wanted && tray is not null) { tray.Dispose(); tray = null; }
+    }
 
     private void ReadActivity()
     {
-        activityLocks = [];
+        activityLocks = []; breakNotes = [];
         try
         {
             var journal = ActivityMonitor.Journal;
             var enabled = journal.Configuration().Enabled;
             var sessions = journal.ReadAll();
             activityLocks = sessions.SelectMany(s => s.Locks).ToArray();
+            breakNotes = sessions.SelectMany(s => s.Breaks).ToArray();
             var sessionId = Process.GetCurrentProcess().SessionId.ToString(CultureInfo.InvariantCulture);
             var current = sessions.FirstOrDefault(s => s.SessionId == sessionId);
             var healthy = current?.StoppedAt is null && current is not null
                 && DateTimeOffset.UtcNow - current.HeartbeatAt < TimeSpan.FromSeconds(20);
-            activityInfo = new { enabled, running = ActivityMonitor.IsRunning() && healthy,
+            activityInfo = new { enabled, running = ActivityMonitor.IsRunning() && healthy, prompts = state.Settings.BreakPrompt,
                 registered = ActivityMonitor.RegisteredAtLogon(), error = current?.Error };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        { activityInfo = new { enabled = false, running = false, registered = false, error = ex.Message }; }
+        { activityInfo = new { enabled = false, running = false, prompts = state.Settings.BreakPrompt, registered = false, error = ex.Message }; }
+        UpdateTray();
     }
 
     private async Task<object?> DispatchAsync(string? command, JsonElement data)
@@ -215,11 +235,10 @@ public sealed class MainWindow : Window
                 }
                 state.Settings = settings; activePlan = null; store.Save(state);
                 if (data.TryGetProperty("activityEnabled", out var activityEnabled) && activityEnabled.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                {
                     ActivityMonitor.Journal.Configure(activityEnabled.GetBoolean());
-                    if (activityEnabled.GetBoolean()) await ActivityMonitor.StartAndWaitAsync();
-                    else await Task.Run(() => ActivityMonitor.Stop());
-                }
+                // The monitor runs for activity tracking, break prompts or both; it picks up other setting changes itself.
+                if (ActivityMonitor.Wanted()) await ActivityMonitor.StartAndWaitAsync();
+                else await Task.Run(() => ActivityMonitor.Stop());
                 ReadActivity();
                 Title = settings.Language == "en" ? "CompUsage — Work log" : "CompUsage — Munkaidőnapló";
                 windowTheme.Set(settings.Theme);
@@ -257,6 +276,22 @@ public sealed class MainWindow : Window
                     if (old.Meeting is null) state.Meetings.Remove(key); else state.Meetings[key] = old.Meeting;
                 }
                 activePlan = null; store.Save(state); await UpdateWorkbookInfoAsync(); return Snapshot();
+            case "breakReason":
+                var pairId = data.GetProperty("pairId").GetString();
+                var pair = Reports().SelectMany(d => d.Pairs).SingleOrDefault(p => p.Id == pairId)
+                    ?? throw new ArgumentException("A szünetpár megváltozott. Frissítsd a naplót, majd próbáld újra.");
+                var reasonValue = data.GetProperty("reason");
+                var previousReason = state.BreakReasons.GetValueOrDefault(pair.Id);
+                if (reasonValue.ValueKind == JsonValueKind.Null) state.BreakReasons.Remove(pair.Id);
+                else state.BreakReasons[pair.Id] = BreakReasons.Encode(reasonValue.GetString()!,
+                    data.TryGetProperty("text", out var reasonText) && reasonText.ValueKind == JsonValueKind.String ? reasonText.GetString() : null);
+                try { store.Save(state); }
+                catch
+                {
+                    if (previousReason is null) state.BreakReasons.Remove(pair.Id); else state.BreakReasons[pair.Id] = previousReason;
+                    throw;
+                }
+                activePlan = null; await UpdateWorkbookInfoAsync(); return Snapshot();
             case "copy":
                 var text = data.GetProperty("text").GetString() ?? "";
                 if (text.Length > 2_000_000) throw new ArgumentException("Túl sok másolandó adat.");
@@ -387,7 +422,8 @@ public sealed class MainWindow : Window
             meeting = d.Meeting is null ? null : new { id = d.Meeting.Id, from = TimeValue(d.Meeting.Lock.WorkTimestamp, true), to = TimeValue(d.Meeting.Unlock.Timestamp), minutes = (int)d.Meeting.Duration.TotalMinutes },
             manualMeeting = d.ManualMeeting, noMeeting = d.NoMeeting,
             pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.WorkTimestamp, true), to = TimeValue(p.Unlock.Timestamp), minutes = (int)p.Duration.TotalMinutes,
-                fromActivity = p.Lock.ActivityTimestamp is not null, activity = ActivityValue(p.Lock) }),
+                fromActivity = p.Lock.ActivityTimestamp is not null, activity = ActivityValue(p.Lock),
+                reason = p.Reason, reasonText = p.ReasonText, reasonManual = p.ReasonManual, reasonAutomatic = p.ReasonAutomatic }),
             sections = d.Sections.Select(RowSnapshot),
             copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(display.CopyRow)) : "",
             eventCopy = "Dátum\tIdőpont\tEsemény\tAzonosító\r\n" + string.Join("\r\n", d.Events.Select(e => $"{TimeZoneInfo.ConvertTime(e.Timestamp, TimeZoneInfo.Local):yyyy.MM.dd}\t{Presentation.Time(e.Timestamp, TimeZoneInfo.Local, true)}\t{e.Label}\t{e.EventId}")),

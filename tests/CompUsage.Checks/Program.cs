@@ -391,6 +391,63 @@ Check("Activity mode falls back to locks for unavailable samples and never moves
     Equal(At(16,"18:00"),WorkReports.Build(list,settings,lunches,now,zone,activity:[record]).Single().Sections[^1].To);
 });
 
+Check("Break prompts follow the split threshold and never ask at the start of a day", () =>
+{
+    True(settings.BreakPrompt); Equal(40, settings.BreakPromptSeconds); Equal(25, settings.CoffeeBreakMaxMinutes);
+    True(!BreakReasons.ShouldPrompt(At(16,"14:00"), At(16,"14:10"), settings, zone));
+    True(BreakReasons.ShouldPrompt(At(16,"14:00"), At(16,"14:10:01"), settings, zone));
+    True(!BreakReasons.ShouldPrompt(At(15,"18:00"), At(16,"08:00"), settings, zone));
+    True(!BreakReasons.ShouldPrompt(At(16,"14:00"), At(16,"15:00"), settings with { BreakPrompt = false }, zone));
+    Throws<ArgumentException>(() => (settings with { BreakPromptSeconds = 4 }).Validate());
+    Throws<ArgumentException>(() => (settings with { CoffeeBreakMaxMinutes = 0 }).Validate());
+});
+Check("Break suggestions: stand-up by meeting window, lunch by clock, then coffee or meeting by length", () =>
+{
+    Equal(BreakReasons.Standup, BreakReasons.Suggest(At(16,"09:30"), At(16,"09:45"), settings, zone, false));
+    Equal(BreakReasons.Meeting, BreakReasons.Suggest(At(16,"13:40"), At(16,"14:10"), settings, zone, false));
+    Equal(BreakReasons.Lunch, BreakReasons.Suggest(At(16,"11:35"), At(16,"12:05"), settings, zone, false));
+    Equal(BreakReasons.Coffee, BreakReasons.Suggest(At(16,"11:35"), At(16,"11:55"), settings, zone, true));
+    Equal(BreakReasons.Coffee, BreakReasons.Suggest(At(16,"14:00"), At(16,"14:25"), settings, zone, false));
+    Equal(BreakReasons.Meeting, BreakReasons.Suggest(At(16,"15:00"), At(16,"15:25:01"), settings, zone, false));
+    True(BreakReasons.SavedOnTimeout(BreakReasons.Standup) && BreakReasons.SavedOnTimeout(BreakReasons.Lunch));
+    True(!BreakReasons.SavedOnTimeout(BreakReasons.Coffee) && !BreakReasons.SavedOnTimeout(BreakReasons.Meeting) && !BreakReasons.SavedOnTimeout(BreakReasons.Other));
+});
+Check("Break reason overrides round-trip and reject invalid input", () =>
+{
+    Equal("other:Orvos", BreakReasons.Encode("other", "  Orvos ")); Equal(("other", "Orvos"), BreakReasons.Parse("other:Orvos"));
+    Equal("other", BreakReasons.Encode("other", "")); Equal("coffee", BreakReasons.Encode("coffee", "ignored"));
+    Equal(((string?)null, ""), BreakReasons.Parse("none")); Equal(((string?)null, ""), BreakReasons.Parse("unknown"));
+    Throws<ArgumentException>(() => BreakReasons.Encode("nap", null));
+    Throws<ArgumentException>(() => BreakReasons.Encode("other", new string('x', 201)));
+});
+Check("Answered stand-ups and meetings count as work; coffee and other breaks split; answered lunch wins over the clock", () =>
+{
+    List<LockEvent> Events() => [Event(16,"08:00",false), Event(16,"09:30",true), Event(16,"09:45",false), Event(16,"11:32",true), Event(16,"11:51",false),
+        Event(16,"14:00",true), Event(16,"14:40",false), Event(16,"17:00",true)];
+    var list = Events();
+    WorkReport Build(IEnumerable<BreakNote> notes, Dictionary<string,string>? reasons = null, AppSettings? config = null) =>
+        WorkReports.Build(list, config ?? settings, lunches, now, zone, breaks: notes, reasons: reasons).Single();
+    Equal(4, Build([]).Sections.Count);
+    var standup = new BreakNote(At(16,"09:30:02"), At(16,"09:45:20"), BreakReasons.Standup);
+    var meeting = new BreakNote(At(16,"14:00:01"), At(16,"14:41:30"), BreakReasons.Meeting);
+    var day = Build([standup, meeting]);
+    Equal(BreakReasons.Standup, day.Pairs[0].Reason); Equal(BreakReasons.Meeting, day.Pairs[2].Reason); Equal(2, day.Sections.Count);
+    // A note more than two minutes away from the unlock belongs to another break.
+    True(Build([meeting with { UnlockedAt = At(16,"14:42:30") }]).Pairs[2].Reason is null);
+    var manual = Build([standup, meeting], new() { [day.Pairs[2].Id] = "other:Orvos" });
+    Equal(BreakReasons.Other, manual.Pairs[2].Reason); Equal("Orvos", manual.Pairs[2].ReasonText); True(manual.Pairs[2].ReasonManual); Equal(3, manual.Sections.Count);
+    True(Build([meeting], new() { [day.Pairs[2].Id] = "none" }).Pairs[2].Reason is null);
+    var lunch = Build([new BreakNote(At(16,"14:00"), At(16,"14:40"), BreakReasons.Lunch, Automatic: true)]);
+    Equal(lunch.Pairs[2].Id, lunch.Lunch!.Id); True(lunch.Pairs[2].ReasonAutomatic); Equal(4, lunch.Sections.Count);
+    var coffee = Build([new BreakNote(At(16,"11:32"), At(16,"11:51"), BreakReasons.Coffee)]);
+    True(coffee.Lunch?.Id != coffee.Pairs[1].Id);
+    lunches["2026-10-16"] = day.Pairs[1].Id;
+    Equal(day.Pairs[1].Id, Build([new BreakNote(At(16,"14:00"), At(16,"14:40"), BreakReasons.Lunch)]).Lunch!.Id);
+    lunches.Clear();
+    var meetingDay = Build([standup], config: settings with { IgnoreDailyMeeting = true, MeetingStartFrom = new(9,0), MeetingStartUntil = new(9,10) });
+    Equal(meetingDay.Pairs[0].Id, meetingDay.Meeting!.Id);
+});
+
 var fixtureRoot = Path.Combine(Path.GetTempPath(), "CompUsage-Checks-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(fixtureRoot);
 string Fixture(string name)
@@ -427,6 +484,18 @@ try
         Equal(2,journal.ReadAll().Count); Equal(1,journal.Load("1").Locks.Count);
         journal.Configure(false); True(!journal.Configuration().Enabled); Equal(1,journal.Load("1").Locks.Count);
         Throws<ArgumentException>(()=>journal.Load("../state"));
+    });
+    Check("Break notes and the open break survive status updates and are pruned with the lock history",()=>
+    {
+        var journal = new ActivityJournal(Path.Combine(fixtureRoot,"breaks"));
+        var session = new ActivitySession {SessionId="3",StartedAt=now,HeartbeatAt=now,LockedAt=now.AddMinutes(-3),
+            Breaks=[new(now.AddMinutes(-40),now.AddMinutes(-20),BreakReasons.Coffee),new(now.AddDays(-62),now.AddDays(-62),BreakReasons.Lunch)]};
+        journal.Save(session,now);
+        journal.Heartbeat(session,now.AddSeconds(5));
+        var loaded = journal.Load("3");
+        Equal(1,loaded.Breaks.Count); Equal(BreakReasons.Coffee,loaded.Breaks[0].Reason); Equal(now.AddMinutes(-3),loaded.LockedAt);
+        loaded.LockedAt = null; journal.Heartbeat(loaded,now.AddSeconds(10));
+        True(journal.Load("3").LockedAt is null); Equal(1,journal.Load("3").Breaks.Count);
     });
     Check("Section comments reach Details as literal Unicode text, including formulas and Excel escape sequences",()=>
     {

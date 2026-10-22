@@ -9,6 +9,8 @@ public sealed class LocalState
     public Dictionary<string, string> Lunches { get; set; } = [];
     public Dictionary<string, string> Meetings { get; set; } = [];
     public Dictionary<string, string> SectionComments { get; set; } = [];
+    // Pair ID -> break reason chosen in the app; it overrides the background prompt's answer.
+    public Dictionary<string, string> BreakReasons { get; set; } = [];
     public List<LockEvent> Events { get; set; } = [];
     public List<LoggingGap> Gaps { get; set; } = [];
     public string[] Expanded { get; set; } = [];
@@ -26,7 +28,8 @@ public sealed class LocalState
 public sealed class LocalStore
 {
     public static string DirectoryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CompUsage");
-    private readonly string path = Path.Combine(DirectoryPath, "state.json");
+    public static string FilePath => Path.Combine(DirectoryPath, "state.json");
+    private readonly string path = FilePath;
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
     public LocalState Load()
     {
@@ -52,6 +55,9 @@ public sealed class LocalStore
         foreach (var key in state.Lunches.Keys.Where(k => !DateOnly.TryParse(k, out var date) || date < cutoff).ToArray()) state.Lunches.Remove(key);
         foreach (var key in state.Meetings.Keys.Where(k => !DateOnly.TryParse(k, out var date) || date < cutoff).ToArray()) state.Meetings.Remove(key);
         foreach (var key in state.SectionComments.Keys.Where(k => !DateOnly.TryParse(k.Split('|')[0],out var date) || date < cutoff).ToArray()) state.SectionComments.Remove(key);
+        foreach (var key in state.BreakReasons.Keys.Where(k => k.Split(':') is not [_, var ticks, _, _]
+            || !long.TryParse(ticks, out var value) || value < DateTimeOffset.MinValue.UtcTicks || value > DateTimeOffset.MaxValue.UtcTicks
+            || new DateTimeOffset(value, TimeSpan.Zero) < DateTimeOffset.UtcNow.AddDays(-61)).ToArray()) state.BreakReasons.Remove(key);
         state.Gaps.RemoveAll(g => g.To is { } to && to < DateTimeOffset.UtcNow.AddDays(-61));
         Directory.CreateDirectory(DirectoryPath);
         var temp = path + ".tmp";

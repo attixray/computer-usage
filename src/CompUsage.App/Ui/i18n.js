@@ -2,6 +2,14 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Ok':'Reason','Szünet oka':'Break reason','Standup meeting':'Stand-up meeting','Ebédszünet':'Lunch break','Kávészünet':'Coffee break',
+    'Egyéb szünet':'Other break','Leírás':'Description','Szünet leírása':'Break description','Kézi választás törlése':'Clear manual choice',
+    'Automatikus (lejárt kérdés)':'Automatic (prompt timed out)','Felugró ablakból':'From the prompt',
+    'Szünetek':'Breaks','Szünet okának megkérdezése':'Ask for the break reason',
+    'Kérdés bezárása ennyi idő után (mp)':'Close the prompt after (seconds)','Kávészünet maximum (perc)':'Maximum coffee break (minutes)',
+    'A visszaszámlálás szünetel, amíg az egér az ablakon van vagy az ablakban dolgozol. Lejáratkor csak a javasolt standup vagy ebédszünet mentődik; más javaslat nem.':'The countdown pauses while the pointer is over the prompt or you are working in it. On timeout only a suggested stand-up or lunch break is saved; other suggestions are not.',
+    'Javaslat: standup a napi meeting idősávjában és maximális hosszán belül; ebéd a várható ebédidő körül; ennél rövidebb vagy egyenlő szünet kávészünet, hosszabb meeting. A standup és a meeting munkaidőnek számít, és nem bontja a munkaszakaszt; a kávé- és az egyéb szünet igen. A választás a napi listában módosítható.':'Suggestion: stand-up within the daily meeting window and maximum length; lunch around the expected lunch time; otherwise a coffee break up to the coffee maximum and a meeting above it. Stand-ups and meetings count as work and do not split the work section; coffee and other breaks do. You can change the answer in the daily list.',
+    'A kérdést a háttérfolyamat jeleníti meg, amely a tálcán ikont is mutat. Ha a háttérfigyelő ki van kapcsolva, inputidőt nem mér.':'The prompt is shown by the background process, which also shows a notification-area icon. With activity tracking off it does not measure input times.',
     'Munkaszakaszok':'Work sections','Megjegyzés':'Comment','Hossz':'Duration','eddig':'so far',
     'Teljes Excel-sor másolása':'Copy full Excel row','Megjegyzés másolása':'Copy comment',
     'Időadatok másolása (Excel A–C)':'Copy time values (Excel A–C)',
@@ -134,6 +142,8 @@ window.i18n = (() => {
         [/^(\d+) új sor · a teljes napokból és a mai napból\. A folyamatban lévő szakasz vége üresen marad\. A megjegyzések a Details oszlopba kerülnek\.$/,'$1 new rows from complete days and today. The end of a section in progress stays blank. Comments are written to the Details column.'],
         [/^A nap folytatása \((\d+)\. sor után\)$/,'Continue the day (after row $1)'],
         [/^Lock \/ unlock párok \((\d+)\)$/,'Lock / unlock pairs ($1)'],
+        [/^(Kézi választás|Automatikus \(lejárt kérdés\)|Felugró ablakból) · munkaidő$/,(_,source)=>`${text(source,'en')} · work time`],
+        [/^Alapból bekapcsolva\. Feloldás vagy bejelentkezés után a képernyő jobb alsó sarkában megkérdezi az előző szünet okát, ha az hosszabb volt a sorokra bontó szünetnél \((\d+) perc\)\. A nap első feloldásakor nem kérdez\. Választáskor azonnal ment és bezárul\.$/,'Enabled by default. After an unlock or sign-in, a small prompt in the bottom-right corner asks for the reason of the previous break if it was longer than the split threshold ($1 min). It does not ask at the first unlock of the day. A choice is saved and closes the prompt at once.'],
         [/^(.+) eseményei$/,'Events for $1'],[/^(.+) másolása$/,(_,label)=>`${text(label,'en')} — copy`],
         [/^Másolás: (.+)$/,'Copy: $1'],[/^Frissítve: (.+)$/,'Updated: $1'],[/^Saját Windows-fiók · (.+)$/,'Current Windows account · $1'],
         [/^Mentés kész\. Biztonsági másolat: (.+)$/,'Saved. Backup: $1'],
