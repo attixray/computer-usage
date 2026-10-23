@@ -48,7 +48,8 @@ public static class WorkReports
         IEnumerable<LoggingGap>? gaps = null, IEnumerable<ActivityLock>? activity = null,
         IReadOnlyDictionary<string, string>? meetings = null,
         IReadOnlyDictionary<string, string>? comments = null,
-        IEnumerable<BreakNote>? breaks = null, IReadOnlyDictionary<string, string>? reasons = null)
+        IEnumerable<BreakNote>? breaks = null, IReadOnlyDictionary<string, string>? reasons = null,
+        IEnumerable<IdleBreak>? idles = null)
     {
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
@@ -64,7 +65,7 @@ public static class WorkReports
         var originalDays = raw.Where(e => !e.IsSystemEvent).Concat(transitions.Where(e => e.IsSystemEvent))
             .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
-        return ActivityHistory.Apply(transitions, activity ?? [], settings, zone)
+        return ActivityHistory.Idle(ActivityHistory.Apply(transitions, activity ?? [], settings, zone), idles ?? [], settings, now)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
             .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices))

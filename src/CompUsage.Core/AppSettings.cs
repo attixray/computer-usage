@@ -17,6 +17,8 @@ public sealed record AppSettings
     public string Language { get; init; } = "hu";
     public string Theme { get; init; } = "auto";
     public string LockTimeSource { get; init; } = "lock";
+    // With the "remote" source, an input gap of at least this long in a Remote Desktop session counts as a break.
+    public int RemoteIdleMinutes { get; init; } = 10;
     public bool BreakPrompt { get; init; } = true;
     public int BreakPromptSeconds { get; init; } = 40;
     public int CoffeeBreakMaxMinutes { get; init; } = 25;
@@ -31,7 +33,7 @@ public sealed record AppSettings
     public void Validate()
     {
         if (HistoryDays is < 1 or > 60 || MinimumLunchMinutes is < 1 or > 120 || SplitBreakMinutes is < 1 or > 480
-            || MaximumMeetingMinutes is < 1 or > 120 || BreakPromptSeconds is < 5 or > 3600 || CoffeeBreakMaxMinutes is < 1 or > 480)
+            || MaximumMeetingMinutes is < 1 or > 120 || RemoteIdleMinutes is < 3 or > 240 || BreakPromptSeconds is < 5 or > 3600 || CoffeeBreakMaxMinutes is < 1 or > 480)
             throw new ArgumentException("Érvénytelen nap- vagy perchatár.");
         if (FontScale is not (1 or 1.15 or 1.3)) throw new ArgumentException("Érvénytelen betűméret.");
         if (Language is not ("hu" or "en") || Theme is not ("auto" or "dark" or "light"))

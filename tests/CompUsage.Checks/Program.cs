@@ -393,6 +393,29 @@ Check("RDP mode uses the last input only for locks recorded in a Remote Desktop 
     Equal(true,ActivityHistory.Capture(list[3].Timestamp,At(16,"17:45:10"),list[3].Timestamp.AddSeconds(-1),"1",true).Remote);
     var legacy=System.Text.Json.JsonSerializer.Deserialize<ActivityLock>("{\"LockedAt\":\"2026-10-16T18:00:00+02:00\",\"SessionId\":\"1\"}")!;True(legacy.Remote is null);
 });
+Check("RDP mode turns a long input gap without a lock into a break and moves a lock or disconnect that ended it", () =>
+{
+    var remote = settings with {LockTimeSource="remote"};
+    var list = new[] {Event(16,"08:00",false),Event(16,"18:00",true)};
+    IdleBreak[] idles = [new(At(16,"10:00"),At(16,"10:45"),"1"),new(At(16,"17:30"),At(16,"18:00"),"1")];
+    var day = WorkReports.Build(list,remote,lunches,now,zone,idles:idles).Single();
+    Equal(2,day.Sections.Count);Equal(At(16,"10:00"),day.Sections[0].To);Equal(At(16,"10:45"),day.Sections[1].From);
+    // The gap ended by the 18:00 lock ends the day at its last input, without an empty section.
+    Equal(At(16,"17:30"),day.Sections[1].To);Equal(1,day.Pairs.Count);Equal(LockEvent.IdleStart,day.Pairs[0].Lock.EventId);
+    var again = WorkReports.Build(list,remote,lunches,now,zone,idles:idles).Single();Equal(day.Pairs[0].Id,again.Pairs[0].Id);
+    // Other modes ignore the gaps, and a gap of another session or inside a break is skipped.
+    Equal(1,WorkReports.Build(list,settings,lunches,now,zone,idles:idles).Single().Sections.Count);
+    Equal(1,WorkReports.Build(list,remote,lunches,now,zone,idles:[new(At(16,"10:00"),At(16,"10:45"),"2")]).Single().Sections.Count);
+    var withBreak = new[] {Event(16,"08:00",false),Event(16,"12:00",true),Event(16,"12:30",false),Event(16,"18:00",true)};
+    Equal(2,WorkReports.Build(withBreak,remote,lunches,now,zone,idles:[new(At(16,"12:10"),At(16,"12:20"),"1")]).Single().Sections.Count);
+    // A gap still open today shows the day as on a break since its last input.
+    var today = new[] {Event(19,"08:00",false)};
+    var open = WorkReports.Build(today,remote,lunches,now,zone,idles:[new(At(19,"13:30"),null,"1")]).Single();
+    Equal(At(19,"13:30"),open.Sections[^1].To);True(!open.Sections[^1].Open);
+    var session = new ActivitySession { SessionId="1", HeartbeatAt=now.ToUniversalTime(), IdleFrom=At(19,"13:30") };
+    Equal(1,session.AllIdles(now).Count());session.StoppedAt=now;Equal(0,session.AllIdles(now).Count());
+    Throws<ArgumentException>(()=>(remote with {RemoteIdleMinutes=2}).Validate());
+});
 Check("Activity mode falls back to locks for unavailable samples and never moves a lock before its unlock or into another workday", () =>
 {
     var list = new[] {Event(16,"08:00",false),Event(16,"18:00",true)};

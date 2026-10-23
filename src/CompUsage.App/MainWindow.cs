@@ -31,6 +31,7 @@ public sealed class MainWindow : Window
     private ExcelDisplay display;
     private IReadOnlyList<ActivityLock> activityLocks = [];
     private IReadOnlyList<BreakNote> breakNotes = [];
+    private IReadOnlyList<IdleBreak> idleBreaks = [];
     private TrayIcon? tray;
     private static readonly TimeSpan MonitorStartup = TimeSpan.FromSeconds(5);
     private readonly DateTime opened = DateTime.UtcNow;
@@ -172,7 +173,7 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports(AppSettings? settings = null) => WorkReports.Build(state.Events, settings ?? state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks);
 
     // Weekly and monthly totals always cover the whole 60-day history, independent of the day list's range.
     private object Summary()
@@ -212,7 +213,7 @@ public sealed class MainWindow : Window
 
     private void ReadActivity()
     {
-        activityLocks = []; breakNotes = [];
+        activityLocks = []; breakNotes = []; idleBreaks = [];
         try
         {
             var journal = ActivityMonitor.Journal;
@@ -220,6 +221,7 @@ public sealed class MainWindow : Window
             var sessions = journal.ReadAll();
             activityLocks = sessions.SelectMany(s => s.Locks).ToArray();
             breakNotes = sessions.SelectMany(s => s.Breaks).ToArray();
+            idleBreaks = sessions.SelectMany(s => s.AllIdles(DateTimeOffset.UtcNow)).ToArray();
             var sessionId = Process.GetCurrentProcess().SessionId.ToString(CultureInfo.InvariantCulture);
             var current = sessions.FirstOrDefault(s => s.SessionId == sessionId);
             var healthy = current?.StoppedAt is null && current is not null

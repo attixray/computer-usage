@@ -271,6 +271,20 @@ public static class ActivityMonitor
             sampledAt = state.LastInputAt is null ? null : now;
             // Sampled with the input, so a lock right before an RDP disconnect still counts as remote.
             remote = GetSystemMetrics(SmRemoteSession) != 0;
+            TrackIdle(now);
+        }
+
+        // In an RDP session a locked client computer leaves the remote session unlocked, so a long input gap is a break.
+        private void TrackIdle(DateTimeOffset now)
+        {
+            var current = settings();
+            if (!remote || current.LockTimeSource != "remote" || state.LastInputAt is not { } last) { state.IdleFrom = null; return; }
+            if (state.IdleFrom is { } from && last > from.AddSeconds(1))
+            {
+                state.Idles.Add(new(from, last, state.SessionId)); state.IdleFrom = null; Save(true);
+                app.Dispatcher.BeginInvoke(() => { Prompt(from, last); UpdateGoal(); });
+            }
+            else if (state.IdleFrom is null && now - last >= TimeSpan.FromMinutes(current.RemoteIdleMinutes)) { state.IdleFrom = last; Save(); }
         }
 
         private IntPtr Messages(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -280,7 +294,7 @@ public static class ActivityMonitor
             {
                 if (wParam.ToInt32() == 7)
                 {
-                    locked = true; state.LockedAt ??= DateTimeOffset.UtcNow;
+                    locked = true; state.LockedAt ??= DateTimeOffset.UtcNow; state.IdleFrom = null;
                     if (state.Enabled && journal.Configuration().Enabled)
                         state.Locks.Add(ActivityHistory.Capture(DateTimeOffset.UtcNow, state.LastInputAt, sampledAt, state.SessionId, remote));
                     sampledAt = null; Save(true);
@@ -294,7 +308,10 @@ public static class ActivityMonitor
                 }
                 else if (wParam.ToInt32() == 6) { state.SessionEnded = true; Save(); }
                 else if (wParam.ToInt32() is 2 or 4)
-                { locked = true; state.LockedAt ??= DateTimeOffset.UtcNow; sampledAt = null; state.LastInputAt = null; Save(); }
+                {
+                    if (state.IdleFrom is { } from) { state.Idles.Add(new(from, DateTimeOffset.UtcNow, state.SessionId)); state.IdleFrom = null; }
+                    locked = true; state.LockedAt ??= DateTimeOffset.UtcNow; sampledAt = null; state.LastInputAt = null; Save(true);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
             { state.Error = ex.Message; sampledAt = null; }
@@ -405,7 +422,7 @@ public static class ActivityMonitor
 
         private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
             WorkReports.Build(events, shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
-                shared.Meetings, null, state.Breaks, shared.BreakReasons)
+                shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow))
             .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));
 
         // Today's worked time from the Security log, with the app's day choices and this monitor's answers; also refreshes the tray list.

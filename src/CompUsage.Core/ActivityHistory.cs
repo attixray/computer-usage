@@ -6,6 +6,8 @@ namespace CompUsage.Core;
 // Remote is true when the lock happened in a Remote Desktop session, null for observations saved before it was recorded.
 public sealed record ActivityLock(DateTimeOffset LockedAt, DateTimeOffset? LastInputAt, DateTimeOffset? SampledAt, string SessionId, bool? Remote = null);
 public sealed record ActivityConfiguration(bool Enabled = false);
+// An input gap in a Remote Desktop session: a locked client computer leaves the remote session unlocked. To is null while it lasts.
+public sealed record IdleBreak(DateTimeOffset From, DateTimeOffset? To, string SessionId);
 public sealed class ActivitySession
 {
     public string SessionId { get; set; } = "";
@@ -25,6 +27,12 @@ public sealed class ActivitySession
     public string? GoalNotifiedOn { get; set; }
     public List<ActivityLock> Locks { get; set; } = [];
     public List<BreakNote> Breaks { get; set; } = [];
+    public List<IdleBreak> Idles { get; set; } = [];
+    // Last input before the current RDP input gap, once the gap reached the configured length.
+    public DateTimeOffset? IdleFrom { get; set; }
+    // The ended gaps and, while the monitor is alive, the current one.
+    public IEnumerable<IdleBreak> AllIdles(DateTimeOffset now) => IdleFrom is { } from && StoppedAt is null
+        && now - HeartbeatAt < TimeSpan.FromSeconds(20) ? Idles.Append(new(from, null, SessionId)) : Idles;
 }
 
 public static class ActivityHistory
@@ -80,6 +88,34 @@ public static class ActivityHistory
             yield return current;
         }
     }
+
+    // With the "remote" source an RDP idle break becomes a lock at its last input and an unlock at the input that ended it.
+    // A gap ended by a lock or a disconnect moves that event back to the last input instead, so no empty section remains.
+    public static IReadOnlyList<LockEvent> Idle(IEnumerable<LockEvent> transitions, IEnumerable<IdleBreak> idles,
+        AppSettings settings, DateTimeOffset now)
+    {
+        var list = transitions.ToList();
+        if (settings.LockTimeSource != "remote") return list;
+        foreach (var idle in idles.Where(i => i.From <= now).OrderBy(i => i.From))
+        {
+            var before = list.FindLastIndex(e => e.Timestamp <= idle.From);
+            if (before < 0 || list[before].IsLock || list[before].SessionId != idle.SessionId) continue;
+            var next = before + 1 < list.Count ? list[before + 1] : null;
+            var end = idle.To ?? now;
+            if (next is { IsLock: true } && next.Timestamp <= end.AddSeconds(5))
+            {
+                if (next.WorkTimestamp > idle.From) list[before + 1] = next with { ActivityTimestamp = idle.From };
+            }
+            else if (next is null || next.Timestamp > end)
+            {
+                var source = list[before];
+                list.Insert(before + 1, source with { RecordId = -2 * idle.From.ToUnixTimeSeconds(), Timestamp = idle.From, EventId = LockEvent.IdleStart, ActivityTimestamp = null });
+                if (idle.To is { } to && to > idle.From)
+                    list.Insert(before + 2, source with { RecordId = -2 * to.ToUnixTimeSeconds() - 1, Timestamp = to, EventId = LockEvent.IdleEnd, ActivityTimestamp = null });
+            }
+        }
+        return list;
+    }
 }
 
 // Activity data has separate files from the UI state. Only the monitor for a session writes its journal.
@@ -94,7 +130,7 @@ public sealed class ActivityJournal(string directory)
         var history = Read<ActivitySession>(SessionPath(session)) ?? new() { SessionId = session };
         var status = Read<ActivitySession>(Path.Combine(directory, $"status-{session}.json"));
         if (status is null || status.HeartbeatAt < history.HeartbeatAt) return history;
-        status.Locks = history.Locks; status.Breaks = history.Breaks;
+        status.Locks = history.Locks; status.Breaks = history.Breaks; status.Idles = history.Idles;
         return status;
     }
     public IReadOnlyList<ActivitySession> ReadAll() => !Directory.Exists(directory) ? [] :
@@ -107,11 +143,12 @@ public sealed class ActivityJournal(string directory)
         session.HeartbeatAt = now;
         // Keep the five-second health update small instead of rewriting sixty days of history each time.
         Write($"status-{session.SessionId}.json", new { session.SessionId, session.StartedAt, session.HeartbeatAt,
-            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt, session.SessionEnded, session.GoalNotifiedOn });
+            session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt, session.SessionEnded, session.GoalNotifiedOn, session.IdleFrom });
     }
     public void Save(ActivitySession session, DateTimeOffset now)
     {
         session.Locks.RemoveAll(r => r.LockedAt < now.AddDays(-61));
+        session.Idles.RemoveAll(r => r.From < now.AddDays(-61));
         session.Breaks.RemoveAll(b => b.UnlockedAt < now.AddDays(-61));
         Write(Path.GetFileName(SessionPath(session.SessionId)), session);
     }
