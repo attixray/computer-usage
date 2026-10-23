@@ -36,7 +36,7 @@ public sealed record AppSettings
         if (FontScale is not (1 or 1.15 or 1.3)) throw new ArgumentException("Érvénytelen betűméret.");
         if (Language is not ("hu" or "en") || Theme is not ("auto" or "dark" or "light"))
             throw new ArgumentException("Érvénytelen nyelv vagy téma.");
-        if (LockTimeSource is not ("lock" or "activity")) throw new ArgumentException("Érvénytelen aktivitási időforrás.");
+        if (LockTimeSource is not ("lock" or "activity" or "remote")) throw new ArgumentException("Érvénytelen aktivitási időforrás.");
         if (DailyGoalMinutes is < 0 or > 1440 || !Enum.IsDefined(WeekStart)) throw new ArgumentException("Érvénytelen napi cél vagy hétkezdés.");
         foreach (var list in new[] { BreakSuggestions, WorkSuggestions })
         {

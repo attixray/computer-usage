@@ -201,6 +201,7 @@ public static class ActivityMonitor
         private readonly TrayIcon? tray;
         private BreakPromptWindow? prompt;
         private DateTimeOffset? sampledAt;
+        private bool remote;
         private bool locked;
         private bool registered;
         private int ticks;
@@ -268,6 +269,8 @@ public static class ActivityMonitor
             if (!GetLastInputInfo(ref input)) { sampledAt = null; state.LastInputAt = null; return; }
             state.LastInputAt = ActivityHistory.InputTime(now, GetTickCount64(), input.Tick);
             sampledAt = state.LastInputAt is null ? null : now;
+            // Sampled with the input, so a lock right before an RDP disconnect still counts as remote.
+            remote = GetSystemMetrics(SmRemoteSession) != 0;
         }
 
         private IntPtr Messages(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -279,7 +282,7 @@ public static class ActivityMonitor
                 {
                     locked = true; state.LockedAt ??= DateTimeOffset.UtcNow;
                     if (state.Enabled && journal.Configuration().Enabled)
-                        state.Locks.Add(ActivityHistory.Capture(DateTimeOffset.UtcNow, state.LastInputAt, sampledAt, state.SessionId));
+                        state.Locks.Add(ActivityHistory.Capture(DateTimeOffset.UtcNow, state.LastInputAt, sampledAt, state.SessionId, remote));
                     sampledAt = null; Save(true);
                 }
                 else if (wParam.ToInt32() is 8 or 1 or 3)
@@ -504,6 +507,9 @@ public static class ActivityMonitor
     private static extern bool GetLastInputInfo(ref LastInput input);
     [DllImport("kernel32.dll")]
     private static extern ulong GetTickCount64();
+    private const int SmRemoteSession = 0x1000;
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
     [DllImport("wtsapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool WTSRegisterSessionNotification(IntPtr window, uint flags);

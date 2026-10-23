@@ -3,7 +3,8 @@ using System.Text.Json;
 
 namespace CompUsage.Core;
 
-public sealed record ActivityLock(DateTimeOffset LockedAt, DateTimeOffset? LastInputAt, DateTimeOffset? SampledAt, string SessionId);
+// Remote is true when the lock happened in a Remote Desktop session, null for observations saved before it was recorded.
+public sealed record ActivityLock(DateTimeOffset LockedAt, DateTimeOffset? LastInputAt, DateTimeOffset? SampledAt, string SessionId, bool? Remote = null);
 public sealed record ActivityConfiguration(bool Enabled = false);
 public sealed class ActivitySession
 {
@@ -35,12 +36,12 @@ public static class ActivityHistory
         return age <= uptime ? now.AddMilliseconds(-age) : null;
     }
 
-    public static ActivityLock Capture(DateTimeOffset lockedAt, DateTimeOffset? input, DateTimeOffset? sampledAt, string session)
+    public static ActivityLock Capture(DateTimeOffset lockedAt, DateTimeOffset? input, DateTimeOffset? sampledAt, string session, bool? remote = null)
     {
         // Never present an old sample after suspend, a stalled process or a failed API call as a fresh observation.
         var fresh = sampledAt is { } sample && sample <= lockedAt && lockedAt - sample <= TimeSpan.FromSeconds(3)
             && input is { } last && last <= sample;
-        return new(lockedAt, fresh ? input : null, fresh ? sampledAt : null, session);
+        return new(lockedAt, fresh ? input : null, fresh ? sampledAt : null, session, remote);
     }
 
     public static ActivityLock? Match(IEnumerable<ActivityLock> records, LockEvent entry)
@@ -68,7 +69,10 @@ public static class ActivityHistory
         {
             var current = entry with { ActivityTimestamp = null };
             if (!entry.IsLock) starts[entry.SessionKey] = entry.Timestamp;
-            else if (settings.LockTimeSource == "activity" && Match(observations, entry) is { LastInputAt: { } input } match
+            // "remote" uses the last input only for locks in a Remote Desktop session, where a locked client machine leaves
+            // the remote session running until its own idle lock; local locks keep their Windows lock time.
+            else if (settings.LockTimeSource is "activity" or "remote" && Match(observations, entry) is { LastInputAt: { } input } match
+                && (settings.LockTimeSource == "activity" || match.Remote == true)
                 && Capture(match.LockedAt, input, match.SampledAt, match.SessionId).LastInputAt is not null
                 && input <= entry.Timestamp && starts.TryGetValue(entry.SessionKey, out var from) && input >= from
                 && WorkDayClock.GetDate(input, settings.DayStart, zone) == WorkDayClock.GetDate(entry.Timestamp, settings.DayStart, zone))

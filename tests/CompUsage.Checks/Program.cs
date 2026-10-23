@@ -379,6 +379,20 @@ Check("Activity mode updates lunch, split rules, exact copying and the final sec
     var manual = new Dictionary<string,string>{{"2026-10-16",original.Pairs[0].Id}};
     True(WorkReports.Build(list,settings with {LockTimeSource="activity"},manual,now,zone,activity:records).Single().ManualLunch);
 });
+Check("RDP mode uses the last input only for locks recorded in a Remote Desktop session", () =>
+{
+    var list = new[] {Event(16,"08:00",false),Event(16,"11:40",true),Event(16,"11:50",false),Event(16,"18:00",true)};
+    ActivityLock[] records = [new(list[1].Timestamp,At(16,"11:20:30"),list[1].Timestamp.AddSeconds(-1),"1",Remote:false),
+        new(list[3].Timestamp,At(16,"17:45:10"),list[3].Timestamp.AddSeconds(-1),"1",Remote:true)];
+    var remote = settings with {LockTimeSource="remote"};remote.Validate();
+    var day = WorkReports.Build(list,remote,lunches,now,zone,activity:records).Single();
+    // The local 11:40 lock keeps its time, so its ten-minute break does not split the day as the activity mode would.
+    Equal(1,day.Sections.Count);Equal(At(16,"17:45:10"),day.Sections[0].To);
+    // Observations saved before the flag existed keep the lock time.
+    Equal(At(16,"18:00"),WorkReports.Build(list,remote,lunches,now,zone,activity:[records[1] with {Remote=null}]).Single().Sections[^1].To);
+    Equal(true,ActivityHistory.Capture(list[3].Timestamp,At(16,"17:45:10"),list[3].Timestamp.AddSeconds(-1),"1",true).Remote);
+    var legacy=System.Text.Json.JsonSerializer.Deserialize<ActivityLock>("{\"LockedAt\":\"2026-10-16T18:00:00+02:00\",\"SessionId\":\"1\"}")!;True(legacy.Remote is null);
+});
 Check("Activity mode falls back to locks for unavailable samples and never moves a lock before its unlock or into another workday", () =>
 {
     var list = new[] {Event(16,"08:00",false),Event(16,"18:00",true)};

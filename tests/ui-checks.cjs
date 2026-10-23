@@ -85,6 +85,17 @@ const {parseHTML} = require('linkedom');
     await click('[data-copy="10:12:23"]');assert.equal(clipboard,'10:12:23');
     state.settings.lockTimeSource='lock';await click('[data-refresh]');
   });
+  await check('The RDP time source is offered, saved and labelled separately from the activity mode',async()=>{
+    await click('[data-settings]');assert.ok(document.querySelector('[data-setting="lockTimeSource"] option[value="remote"]'));
+    await input('[data-setting="lockTimeSource"]','remote');await click('[data-save]');
+    assert.equal(calls.findLast(c=>c.command==='settings').data.settings.lockTimeSource,'remote');
+    state.settings.lockTimeSource='remote';state.days[0].lastFromActivity=true;await click('[data-refresh]');
+    assert.match(node('[data-day]').textContent,/Aktivitás alapján \(RDP\)|From last input \(RDP\)/);
+    state.days[0].lastFromActivity=false;await click('[data-refresh]');
+    assert.doesNotMatch(node('[data-day] .cu-metrics').textContent,/Nincs aktivitási adat|No activity data/);
+    assert.match(node('[data-day] .cu-metrics').textContent,/Windows-esemény alapján|From the Windows event/);
+    state.settings.lockTimeSource='lock';await click('[data-refresh]');
+  });
   await check('Read access is configured only by its explicit settings action, preserving unknown audit state on ordinary saves',async()=>{
     state.permissions.readAccessRequired=true;state.logging=null;await click('[data-refresh]');
     assert.ok(document.querySelector('[data-read-access-warning]'));
