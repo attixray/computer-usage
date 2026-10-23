@@ -99,7 +99,8 @@ public static class ActivityHistory
         foreach (var idle in idles.Where(i => i.From <= now).OrderBy(i => i.From))
         {
             var before = list.FindLastIndex(e => e.Timestamp <= idle.From);
-            if (before < 0 || list[before].IsLock || list[before].SessionId != idle.SessionId) continue;
+            // A sign-in (4624) carries no session id, so it accepts the monitor's own session.
+            if (before < 0 || list[before].IsLock || list[before].SessionId is var session && session.Length > 0 && session != idle.SessionId) continue;
             var next = before + 1 < list.Count ? list[before + 1] : null;
             var end = idle.To ?? now;
             if (next is { IsLock: true } && next.Timestamp <= end.AddSeconds(5))

@@ -408,6 +408,10 @@ Check("RDP mode turns a long input gap without a lock into a break and moves a l
     Equal(1,WorkReports.Build(list,remote,lunches,now,zone,idles:[new(At(16,"10:00"),At(16,"10:45"),"2")]).Single().Sections.Count);
     var withBreak = new[] {Event(16,"08:00",false),Event(16,"12:00",true),Event(16,"12:30",false),Event(16,"18:00",true)};
     Equal(2,WorkReports.Build(withBreak,remote,lunches,now,zone,idles:[new(At(16,"12:10"),At(16,"12:20"),"1")]).Single().Sections.Count);
+    // An RDP sign-in has no session id in the Security log, yet it starts the monitor's session.
+    var signIn = new[] {new LockEvent(id++,At(16,"12:56"),4624,"S-1-5-21-1","Test","LOCAL","","0x1"),Event(16,"18:00",true,"2")};
+    var rdp = WorkReports.Build(signIn,remote,lunches,now,zone,idles:[new(At(16,"15:24"),At(16,"15:40"),"2")]).Single();
+    Equal(2,rdp.Sections.Count);Equal(At(16,"15:24"),rdp.Sections[0].To);Equal(1,rdp.Pairs.Count);
     // A gap still open today shows the day as on a break since its last input.
     var today = new[] {Event(19,"08:00",false)};
     var open = WorkReports.Build(today,remote,lunches,now,zone,idles:[new(At(19,"13:30"),null,"1")]).Single();
