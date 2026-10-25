@@ -89,6 +89,14 @@ public static class ActivityHistory
         }
     }
 
+    // An RDP input gap counts only from when the session became usable: the last input before an unlock or reconnect
+    // belongs to the lock or disconnect, not to a new gap.
+    public static DateTimeOffset? IdleStart(DateTimeOffset now, DateTimeOffset lastInput, DateTimeOffset activeSince, TimeSpan threshold)
+    {
+        var from = lastInput > activeSince ? lastInput : activeSince;
+        return now - from >= threshold ? from : null;
+    }
+
     // With the "remote" source an RDP idle break becomes a lock at its last input and an unlock at the input that ended it.
     // A gap ended by a lock or a disconnect moves that event back to the last input instead, so no empty section remains.
     public static IReadOnlyList<LockEvent> Idle(IEnumerable<LockEvent> transitions, IEnumerable<IdleBreak> idles,
@@ -119,6 +127,9 @@ public static class ActivityHistory
     }
 }
 
+// Log events a monitor read, and the time its last read reached.
+public sealed record EventCache(DateTimeOffset? ReadUntil, List<LockEvent> Events);
+
 // Activity data has separate files from the UI state. Only the monitor for a session writes its journal.
 public sealed class ActivityJournal(string directory)
 {
@@ -146,6 +157,21 @@ public sealed class ActivityJournal(string directory)
         Write($"status-{session.SessionId}.json", new { session.SessionId, session.StartedAt, session.HeartbeatAt,
             session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt, session.SessionEnded, session.GoalNotifiedOn, session.IdleFrom });
     }
+    // Windows overwrites the oldest Security-log records, on a busy computer within a day, so the monitor keeps what it read.
+    public IReadOnlyList<LockEvent> Events() => !Directory.Exists(directory) ? [] :
+        Directory.EnumerateFiles(directory, "events-*.json").SelectMany(path =>
+        {
+            try { return Read<EventCache>(path)?.Events ?? []; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return []; }
+        }).DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
+    public DateTimeOffset? EventsReadUntil(string session) => Read<EventCache>(EventsPath(session))?.ReadUntil;
+    public void SaveEvents(string session, IEnumerable<LockEvent> events, DateTimeOffset readUntil)
+    {
+        var path = EventsPath(session);
+        var kept = (Read<EventCache>(path)?.Events ?? []).Concat(events).Where(e => e.Timestamp >= readUntil.AddDays(-61))
+            .DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToList();
+        Write(Path.GetFileName(path), new EventCache(readUntil, kept));
+    }
     public void Save(ActivitySession session, DateTimeOffset now)
     {
         session.Locks.RemoveAll(r => r.LockedAt < now.AddDays(-61));
@@ -153,6 +179,7 @@ public sealed class ActivityJournal(string directory)
         session.Breaks.RemoveAll(b => b.UnlockedAt < now.AddDays(-61));
         Write(Path.GetFileName(SessionPath(session.SessionId)), session);
     }
+    private string EventsPath(string session) => Path.Combine(directory, "events-" + Path.GetFileName(SessionPath(session))["session-".Length..]);
     private string SessionPath(string session)
     {
         if (!int.TryParse(session, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id < 0)

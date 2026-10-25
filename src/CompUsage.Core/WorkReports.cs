@@ -65,10 +65,11 @@ public static class WorkReports
         var originalDays = raw.Where(e => !e.IsSystemEvent).Concat(transitions.Where(e => e.IsSystemEvent))
             .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
+        // An RDP idle break across the day start can open a day that has no Windows event of its own.
         return ActivityHistory.Idle(ActivityHistory.Apply(transitions, activity ?? [], settings, zone), idles ?? [], settings, now)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
-            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays[g.Key], settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices))
+            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays.GetValueOrDefault(g.Key, []), settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices))
             .Select(day => day with { Sections = day.Sections.Select(s => s with { Comment = notes.GetValueOrDefault(s.Id, "") }).ToArray() }).ToArray();
     }
 

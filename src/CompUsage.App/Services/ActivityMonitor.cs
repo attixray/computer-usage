@@ -202,11 +202,14 @@ public static class ActivityMonitor
         private BreakPromptWindow? prompt;
         private DateTimeOffset? sampledAt;
         private bool remote;
+        // When the session last became usable (monitor start, unlock or reconnect); RDP idle gaps never start before it.
+        private DateTimeOffset activeSince = DateTimeOffset.UtcNow;
         private bool locked;
         private bool registered;
         private int ticks;
         private readonly bool interactive;
         private bool goalBusy;
+        private volatile bool cacheBusy;
         private WorkReport? today;
         private DateTimeOffset? todayAt;
 
@@ -256,6 +259,7 @@ public static class ActivityMonitor
                 if (state.Enabled && !locked && IsInteractive(int.Parse(state.SessionId, CultureInfo.InvariantCulture))) Sample();
                 state.Error = registered ? null : "Session notifications are unavailable; retrying.";
                 if (ticks % 60 == 1 && !locked) UpdateGoal();
+                if (ticks % 60 == 31) CacheEvents();
                 if (ticks++ % 5 == 0) Save();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
@@ -284,7 +288,8 @@ public static class ActivityMonitor
                 state.Idles.Add(new(from, last, state.SessionId)); state.IdleFrom = null; Save(true);
                 app.Dispatcher.BeginInvoke(() => { Prompt(from, last); UpdateGoal(); });
             }
-            else if (state.IdleFrom is null && now - last >= TimeSpan.FromMinutes(current.RemoteIdleMinutes)) { state.IdleFrom = last; Save(); }
+            else if (state.IdleFrom is null && ActivityHistory.IdleStart(now, last, activeSince, TimeSpan.FromMinutes(current.RemoteIdleMinutes)) is { } start)
+            { state.IdleFrom = start; Save(); }
         }
 
         private IntPtr Messages(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -302,7 +307,7 @@ public static class ActivityMonitor
                 else if (wParam.ToInt32() is 8 or 1 or 3)
                 {
                     var from = state.LockedAt;
-                    locked = false; sampledAt = null; state.LastInputAt = null; state.LockedAt = null; Tick(); Save();
+                    locked = false; sampledAt = null; state.LastInputAt = null; state.LockedAt = null; activeSince = DateTimeOffset.UtcNow; Tick(); Save();
                     if (from is { } start) { var to = DateTimeOffset.UtcNow; app.Dispatcher.BeginInvoke(() => Prompt(start, to)); }
                     UpdateGoal();
                 }
@@ -414,14 +419,37 @@ public static class ActivityMonitor
         private static string? Shown(WorkReport day, BreakPair pair) =>
             pair.Id == day.Lunch?.Id ? BreakReasons.Lunch : pair.Id == day.Meeting?.Id ? BreakReasons.Standup : pair.Reason;
 
+        // Copies new log events into the journal every minute, locked or not, on a worker thread: the Security log is
+        // circular and can lose a whole night before the app reads it. The first read reaches back as far as the log goes.
+        private void CacheEvents()
+        {
+            if (!interactive || cacheBusy) return;
+            cacheBusy = true;
+            var session = state.SessionId;
+            Task.Run(() =>
+            {
+                try
+                {
+                    var until = DateTimeOffset.UtcNow;
+                    var from = journal.EventsReadUntil(session)?.AddMinutes(-5) ?? until.AddDays(-60);
+                    var sid = System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value;
+                    journal.SaveEvents(session, new SecurityEventService().Read(sid, from, until).Events, until);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException
+                    or System.Diagnostics.Eventing.Reader.EventLogException or ArgumentException or InvalidOperationException) { }
+                finally { cacheBusy = false; }
+            });
+        }
+
         private static IReadOnlyList<LockEvent> ReadEvents(AppSettings current, DateTimeOffset now)
         {
             var from = WorkDayClock.At(WorkDayClock.GetDate(now, current.DayStart, TimeZoneInfo.Local), current.DayStart, TimeZoneInfo.Local);
             return new SecurityEventService().Read(System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value, from, now).Events;
         }
 
+        // Today's events come from the log and from the journal, which still has the ones the log already overwrote.
         private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
-            WorkReports.Build(events, shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
+            WorkReports.Build(events.Concat(journal.Events()), shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
                 shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow))
             .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));
 

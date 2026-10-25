@@ -32,6 +32,7 @@ public sealed class MainWindow : Window
     private IReadOnlyList<ActivityLock> activityLocks = [];
     private IReadOnlyList<BreakNote> breakNotes = [];
     private IReadOnlyList<IdleBreak> idleBreaks = [];
+    private IReadOnlyList<LockEvent> cachedEvents = [];
     private TrayIcon? tray;
     private static readonly TimeSpan MonitorStartup = TimeSpan.FromSeconds(5);
     private readonly DateTime opened = DateTime.UtcNow;
@@ -172,8 +173,15 @@ public sealed class MainWindow : Window
         finally { gate.Release(); }
     }
 
-    private IReadOnlyList<WorkReport> Reports(AppSettings? settings = null) => WorkReports.Build(state.Events, settings ?? state.Settings, state.Lunches,
+    private IReadOnlyList<WorkReport> Reports(AppSettings? settings = null) => WorkReports.Build(state.Events.Concat(cachedEvents), settings ?? state.Settings, state.Lunches,
         DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks);
+
+    // The Windows log may reach back less than the history; events stored here or by the monitor cover the days before it.
+    private DateTimeOffset? Oldest()
+    {
+        var stored = state.Events.Concat(cachedEvents).Select(e => (DateTimeOffset?)e.Timestamp).Min();
+        return stored is { } first && (state.OldestAvailable is null || first < state.OldestAvailable) ? first : state.OldestAvailable;
+    }
 
     // Weekly and monthly totals always cover the whole 60-day history, independent of the day list's range.
     private object Summary()
@@ -182,7 +190,7 @@ public sealed class MainWindow : Window
         var days = Reports(settings);
         var today = WorkDayClock.GetDate(DateTimeOffset.Now, settings.DayStart, TimeZoneInfo.Local);
         var first = today.AddDays(-59);
-        if (state.OldestAvailable is { } oldest && WorkDayClock.GetDate(oldest, settings.DayStart, TimeZoneInfo.Local) > first)
+        if (Oldest() is { } oldest && WorkDayClock.GetDate(oldest, settings.DayStart, TimeZoneInfo.Local) > first)
             first = WorkDayClock.GetDate(oldest, settings.DayStart, TimeZoneInfo.Local);
         object Period(SummaryPeriod p) => new
         {
@@ -213,7 +221,7 @@ public sealed class MainWindow : Window
 
     private void ReadActivity()
     {
-        activityLocks = []; breakNotes = []; idleBreaks = [];
+        activityLocks = []; breakNotes = []; idleBreaks = []; cachedEvents = [];
         try
         {
             var journal = ActivityMonitor.Journal;
@@ -222,6 +230,7 @@ public sealed class MainWindow : Window
             activityLocks = sessions.SelectMany(s => s.Locks).ToArray();
             breakNotes = sessions.SelectMany(s => s.Breaks).ToArray();
             idleBreaks = sessions.SelectMany(s => s.AllIdles(DateTimeOffset.UtcNow)).ToArray();
+            cachedEvents = journal.Events();
             var sessionId = Process.GetCurrentProcess().SessionId.ToString(CultureInfo.InvariantCulture);
             var current = sessions.FirstOrDefault(s => s.SessionId == sessionId);
             var healthy = current?.StoppedAt is null && current is not null

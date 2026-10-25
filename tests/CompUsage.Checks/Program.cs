@@ -393,6 +393,25 @@ Check("RDP mode uses the last input only for locks recorded in a Remote Desktop 
     Equal(true,ActivityHistory.Capture(list[3].Timestamp,At(16,"17:45:10"),list[3].Timestamp.AddSeconds(-1),"1",true).Remote);
     var legacy=System.Text.Json.JsonSerializer.Deserialize<ActivityLock>("{\"LockedAt\":\"2026-10-16T18:00:00+02:00\",\"SessionId\":\"1\"}")!;True(legacy.Remote is null);
 });
+Check("The journal keeps read log events per session, merged without duplicates and pruned after 61 days", () =>
+{
+    var dir = Directory.CreateTempSubdirectory("cu-events").FullName;
+    try
+    {
+        var journal = new ActivityJournal(dir);
+        Equal(0, journal.Events().Count);True(journal.EventsReadUntil("2") is null);
+        var first = Event(18,"08:00",false,"2");var second = Event(18,"21:26",true,"2");var old = Event(18,"09:00",false,"2") with {Timestamp=now.AddDays(-70)};
+        journal.SaveEvents("2",[first,second,old],now);
+        journal.SaveEvents("2",[second,Event(19,"10:14",false,"2")],now.AddMinutes(1));
+        journal.SaveEvents("3",[first],now);
+        Equal(now.AddMinutes(1),journal.EventsReadUntil("2"));
+        var all = journal.Events();Equal(3,all.Count);Equal(first,all[0]);True(all.All(e=>e.Timestamp>now.AddDays(-61)));
+        // A day the Windows log no longer has is rebuilt from the kept events.
+        Equal(At(18,"21:26"),WorkReports.Build(all,settings,lunches,now,zone).Single(d=>d.Date==new DateOnly(2026,10,18)).Sections[^1].To);
+        Throws<ArgumentException>(()=>journal.SaveEvents("../x",[],now));
+    }
+    finally { Directory.Delete(dir,true); }
+});
 Check("RDP mode turns a long input gap without a lock into a break and moves a lock or disconnect that ended it", () =>
 {
     var remote = settings with {LockTimeSource="remote"};
@@ -412,6 +431,16 @@ Check("RDP mode turns a long input gap without a lock into a break and moves a l
     var signIn = new[] {new LockEvent(id++,At(16,"12:56"),4624,"S-1-5-21-1","Test","LOCAL","","0x1"),Event(16,"18:00",true,"2")};
     var rdp = WorkReports.Build(signIn,remote,lunches,now,zone,idles:[new(At(16,"15:24"),At(16,"15:40"),"2")]).Single();
     Equal(2,rdp.Sections.Count);Equal(At(16,"15:24"),rdp.Sections[0].To);Equal(1,rdp.Pairs.Count);
+    // Right after an overnight lock the last input is still last evening's: no gap starts before the unlock.
+    var unlocked = At(19,"10:14");
+    True(ActivityHistory.IdleStart(unlocked.AddSeconds(1),At(18,"21:26"),unlocked,TimeSpan.FromMinutes(10)) is null);
+    Equal(unlocked,ActivityHistory.IdleStart(unlocked.AddMinutes(10),At(18,"21:26"),unlocked,TimeSpan.FromMinutes(10)));
+    Equal(At(19,"10:20"),ActivityHistory.IdleStart(At(19,"10:31"),At(19,"10:20"),unlocked,TimeSpan.FromMinutes(10)));
+    True(ActivityHistory.IdleStart(At(19,"10:29"),At(19,"10:20"),unlocked,TimeSpan.FromMinutes(10)) is null);
+    // An overnight gap ends on a day without any Windows event; that day starts at the resumed input.
+    var overnight = WorkReports.Build([Event(18,"08:00",false)],remote,lunches,now,zone,idles:[new(At(18,"21:26"),At(19,"11:14"),"1")]);
+    var sunday = overnight.Single(d=>d.Date==new DateOnly(2026,10,19));Equal(At(19,"11:14"),sunday.Sections[0].From);True(sunday.Sections[0].Open);Equal(0,sunday.Events.Count);
+    Equal(At(18,"21:26"),overnight.Single(d=>d.Date==new DateOnly(2026,10,18)).Sections[^1].To);
     // A gap still open today shows the day as on a break since its last input.
     var today = new[] {Event(19,"08:00",false)};
     var open = WorkReports.Build(today,remote,lunches,now,zone,idles:[new(At(19,"13:30"),null,"1")]).Single();

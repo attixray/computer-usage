@@ -97,6 +97,8 @@ Settings → Daily goal sets the goal (8:00 by default, 0:00 turns it off), the 
 
 The Summary page beside the Log page shows the 60-day history by week and by calendar month: complete days with work, worked time, the goal multiplied by those days and the balance, and the time spent on stand-ups, meetings, other work, lunch, coffee and other breaks, plus breaks longer than the split threshold without an answer. Incomplete days are counted separately and not measured against the goal. Answers that count as work are part of the worked time as well. A period reaching before the available history is marked as partial, and the current one as in progress.
 
+The Security log is circular: on a busy computer it can overwrite a whole night's records within a day. While it runs, the background monitor copies the lock, sign-in, session and System power events it can read into `%LOCALAPPDATA%\CompUsage\Activity\events-<session>.json` every minute (locked or not, kept for 61 days), and the app and the daily goal merge them with the live log. Enlarging the Security log (an administrator setting) keeps more history as well.
+
 ## Optional activity tracking
 
 The unelevated `--activity-monitor` process samples the current Windows session's `GetLastInputInfo` about once per second while unlocked. On a Windows session-lock notification it saves the latest sample. It never captures keys, text, application names or screenshots, and never starts the elevated event-log helper. The main window shows collector health and automatic-start registration in Time rules; lock details show the last observed input and idle duration. A stopped collector can be restarted from the status row.
