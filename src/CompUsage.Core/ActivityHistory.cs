@@ -89,6 +89,52 @@ public static class ActivityHistory
         }
     }
 
+    // Security records lost to the circular log are rebuilt from the monitor's own observations: a lock it saw becomes a
+    // lock, the unlock of a break it asked about becomes an unlock, and a recovered lock followed by signs of work (an
+    // RDP idle gap, an answered idle break or input before a later lock) ends at the last wake before them.
+    public static IReadOnlyList<LockEvent> Recover(IReadOnlyList<LockEvent> events, IEnumerable<ActivityLock> records,
+        IEnumerable<BreakNote> notes, IEnumerable<IdleBreak> idles)
+    {
+        var list = events.ToList();
+        var user = events.Where(e => !e.IsSystemEvent && e.SessionId.Length > 0 && e.LogonId.Length > 0).ToArray();
+        LockEvent? Template(string session, DateTimeOffset at) => user.Where(e => e.SessionId == session)
+            .MinBy(e => Math.Abs((e.Timestamp - at).Ticks));
+        bool Near(DateTimeOffset a, DateTimeOffset b) => Math.Abs((a - b).TotalSeconds) <= 5;
+        var locks = new List<LockEvent>();
+        foreach (var record in records.OrderBy(r => r.LockedAt))
+        {
+            if (locks.Any(l => l.SessionId == record.SessionId && Near(l.Timestamp, record.LockedAt))
+                || events.Any(e => e.EventId is 4800 or 4779 or 4647 && e.SessionId == record.SessionId && Near(e.Timestamp, record.LockedAt))) continue;
+            if (Template(record.SessionId, record.LockedAt) is not { } template) continue;
+            locks.Add(template with { RecordId = -2 * record.LockedAt.ToUnixTimeMilliseconds(), Timestamp = record.LockedAt, EventId = 4800, ActivityTimestamp = null });
+        }
+        list.AddRange(locks);
+        var unlocks = new List<LockEvent>();
+        foreach (var recovered in locks)
+        {
+            // Only a note of this very lock tells its unlock; notes of idle gaps have no lock record.
+            var note = notes.Where(n => Near(n.LockedAt, recovered.Timestamp) && n.UnlockedAt > recovered.Timestamp).MinBy(n => n.UnlockedAt);
+            var next = list.Where(e => e.Timestamp > recovered.Timestamp && !e.IsSystemEvent && e.SessionKey == recovered.SessionKey)
+                .MinBy(e => e.Timestamp);
+            if (next is { IsLock: false } && (note is null || next.Timestamp <= note.UnlockedAt.AddSeconds(5))) continue;
+            var until = next?.Timestamp ?? DateTimeOffset.MaxValue;
+            DateTimeOffset? at = note is not null && note.UnlockedAt < until ? note.UnlockedAt : null;
+            if (at is null)
+            {
+                // Input in the first minute after a lock was on the lock screen, not work.
+                var work = idles.SelectMany(i => i.To is { } to ? [i.From, to] : new[] { i.From }).Concat(notes.Select(n => n.LockedAt))
+                    .Concat(records.Where(r => r.LastInputAt is not null).Select(r => r.LastInputAt!.Value))
+                    .Where(t => t > recovered.Timestamp.AddMinutes(1) && t < until).DefaultIfEmpty(DateTimeOffset.MaxValue).Min();
+                at = work == DateTimeOffset.MaxValue ? null : events.Where(e => e.EventId == LockEvent.Wake && e.Timestamp > recovered.Timestamp && e.Timestamp < work)
+                    .Select(e => (DateTimeOffset?)e.Timestamp).Max();
+            }
+            if (at is { } unlocked)
+                unlocks.Add(recovered with { RecordId = -2 * unlocked.ToUnixTimeMilliseconds() - 1, Timestamp = unlocked, EventId = 4801 });
+        }
+        list.AddRange(unlocks);
+        return list.OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
+    }
+
     // An RDP input gap counts only from when the session became usable: the last input before an unlock or reconnect
     // belongs to the lock or disconnect, not to a new gap.
     public static DateTimeOffset? IdleStart(DateTimeOffset now, DateTimeOffset lastInput, DateTimeOffset activeSince, TimeSpan threshold)

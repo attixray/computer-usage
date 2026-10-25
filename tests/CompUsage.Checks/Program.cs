@@ -412,6 +412,24 @@ Check("The journal keeps read log events per session, merged without duplicates 
     }
     finally { Directory.Delete(dir,true); }
 });
+Check("Locks and unlocks lost from the circular Security log are rebuilt from the monitor's records", () =>
+{
+    var remote = settings with {LockTimeSource="remote"};
+    // Only the morning unlock survived; sleep and wake come from the System log.
+    var list = new[] {Event(18,"08:00",false),new LockEvent(900,At(18,"21:00:10"),LockEvent.Sleep,"","","","",""),new LockEvent(900,At(19,"09:00"),LockEvent.Wake,"","","","","")};
+    ActivityLock[] records = [new(At(18,"12:00"),At(18,"11:59:59"),At(18,"11:59:59"),"1",true),new(At(18,"12:00:01"),null,null,"1",true),
+        new(At(18,"21:00"),At(18,"20:59:59"),At(18,"20:59:59"),"1",true)];
+    BreakNote[] notes = [new(At(18,"12:00"),At(18,"12:30"),"lunch")];
+    // A gap recorded from lock-screen input right after the lock is no sign of work; the 10:00 gap is.
+    IdleBreak[] idles = [new(At(18,"21:00:05"),At(19,"09:05"),"1"),new(At(19,"10:00"),At(19,"10:20"),"1")];
+    var days = WorkReports.Build(list,remote,lunches,now,zone,activity:records,breaks:notes,idles:idles);
+    var friday = days.Single(d=>d.Date==new DateOnly(2026,10,18));True(!friday.Incomplete);
+    Equal(2,friday.Sections.Count);Equal(At(18,"12:00"),friday.Sections[0].To);Equal(At(18,"12:30"),friday.Sections[1].From);Equal(At(18,"20:59:59"),friday.Sections[1].To);
+    var saturday = days.Single(d=>d.Date==new DateOnly(2026,10,19));True(!saturday.Incomplete);Equal(At(19,"09:00"),saturday.Sections[0].From);
+    // Records that match surviving Security events change nothing.
+    var kept = new[] {Event(18,"08:00",false),Event(18,"12:00",true),Event(18,"12:30",false),Event(18,"21:00",true)};
+    Equal(4,ActivityHistory.Recover(kept,records,notes,[]).Count);
+});
 Check("RDP mode turns a long input gap without a lock into a break and moves a lock or disconnect that ended it", () =>
 {
     var remote = settings with {LockTimeSource="remote"};

@@ -58,8 +58,9 @@ public static class WorkReports
         var notes = comments ?? new Dictionary<string, string>();
         var breakNotes = (breaks ?? []).ToArray();
         var reasonChoices = reasons ?? new Dictionary<string, string>();
-        var raw = SessionEvents.ResolveSessions(SessionEvents.MergeSleeps(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
-            .DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp))).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId));
+        var raw = ActivityHistory.Recover(SessionEvents.ResolveSessions(SessionEvents.MergeSleeps(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
+            .DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp))).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)),
+            (activity ?? []).Where(r => r.LockedAt <= now), breakNotes.Where(n => n.UnlockedAt <= now), (idles ?? []).Where(i => i.From <= now));
         var transitions = SessionEvents.WorkTransitions(raw);
         // Every user record stays visible; machine-wide sleeps and shutdowns only when they affected the user's session.
         var originalDays = raw.Where(e => !e.IsSystemEvent).Concat(transitions.Where(e => e.IsSystemEvent))
