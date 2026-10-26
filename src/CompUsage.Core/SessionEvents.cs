@@ -100,9 +100,18 @@ public static class SessionEvents
                     if (duplicate) break;
                 }
             }
-            // Disconnecting, signing out or shutting down an already locked or disconnected session does not end work again.
-            if (entry.EventId is 4647 or 4779 && closed.GetValueOrDefault(entry.SessionKey)) duplicate = true;
             if (duplicate) continue;
+            // Windows can timestamp suspend just before its lock/disconnect notification. These close
+            // the same session once; keep the native record's exact time and stable break-pair ID.
+            if (previous?.EventId == LockEvent.Sleep && previous.SessionKey == entry.SessionKey
+                && entry.EventId is 4800 or 4779 or 4647 && entry.Timestamp - previous.Timestamp <= TimeSpan.FromSeconds(5))
+            {
+                result[^1] = entry;
+                closed[entry.SessionKey] = true;
+                continue;
+            }
+            // Disconnecting or signing out an already locked or disconnected session does not end work again.
+            if (entry.EventId is 4647 or 4779 && closed.GetValueOrDefault(entry.SessionKey)) continue;
             result.Add(entry);
             closed[entry.SessionKey] = entry.IsLock;
         }
