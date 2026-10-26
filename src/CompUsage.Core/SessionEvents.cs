@@ -59,27 +59,46 @@ public static class SessionEvents
         var list = events.OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
         var result = new List<LockEvent>();
         var closed = new Dictionary<string, bool>();
+        var sleeps = new Dictionary<string, SleepState>();
         for (var i = 0; i < list.Length; i++)
         {
             var entry = list[i];
             var previous = result.Count > 0 ? result[^1] : null;
             if (entry.IsSystemEvent)
             {
-                // Machine-wide events matter only while the user's session is open (sleep, crash, shutdown),
-                // or for the wake that ends a sleep kept here. They take over that session's identity.
-                if (previous is null || (entry.IsLock ? previous.IsLock : previous.EventId != LockEvent.Sleep)) continue;
-                var adopted = entry with { UserSid = previous.UserSid, UserName = previous.UserName, Domain = previous.Domain,
-                    SessionId = previous.SessionId, LogonId = previous.LogonId };
-                result.Add(adopted); closed[adopted.SessionKey] = adopted.IsLock;
+                if (entry.EventId == LockEvent.Wake)
+                {
+                    var sleeping = sleeps.Values.FirstOrDefault(s => s.Wake == entry);
+                    if (sleeping is null) continue;
+                    if (previous?.SessionKey != sleeping.Sleep.SessionKey)
+                    {
+                        sleeps.Remove(sleeping.Sleep.SessionKey);
+                        continue;
+                    }
+                    // A wake is only a provisional work start when there is no native closing record.
+                    // Keep the sleep context even when its synthetic close was replaced or never emitted.
+                    if (!sleeping.RequiresUnlock && previous == sleeping.Sleep)
+                    {
+                        var wake = Adopt(entry, sleeping.Sleep);
+                        sleeping.ProvisionalWake = wake;
+                        result.Add(wake); closed[wake.SessionKey] = false;
+                    }
+                    continue;
+                }
+                // A new machine power transition ends any previous resume window. Shutdowns never reopen sessions.
+                sleeps.Clear();
+                if (previous is null) continue;
+                var adopted = Adopt(entry, previous);
+                if (entry.EventId == LockEvent.Sleep)
+                {
+                    // MergeSleeps supplies non-overlapping periods. Looking ahead to the next power event also
+                    // recognizes resume locks timestamped just before Wake, independently of cross-log record IDs.
+                    var nextPower = list.Skip(i + 1).FirstOrDefault(e => e.IsSystemEvent);
+                    sleeps[adopted.SessionKey] = new(adopted, nextPower?.EventId == LockEvent.Wake ? nextPower : null, previous.IsLock);
+                }
+                if (previous.IsLock) continue;
+                result.Add(adopted); closed[adopted.SessionKey] = true;
                 continue;
-            }
-            if (previous?.EventId == LockEvent.Wake && previous.SessionKey == entry.SessionKey
-                && (!entry.IsLock || entry.Timestamp - previous.Timestamp <= TimeSpan.FromSeconds(60)))
-            {
-                // The wake showed the lock screen: work restarts at the real unlock, and a lock recorded
-                // while resuming repeats the sleep's end.
-                result.RemoveAt(result.Count - 1); closed[entry.SessionKey] = true;
-                if (entry.IsLock) continue;
             }
             var duplicate = false;
             if (Rank(entry) > 0 && HasLogon(entry))
@@ -100,14 +119,60 @@ public static class SessionEvents
                     if (duplicate) break;
                 }
             }
-            // Disconnecting, signing out or shutting down an already locked or disconnected session does not end work again.
-            if (entry.EventId is 4647 or 4779 && closed.GetValueOrDefault(entry.SessionKey)) duplicate = true;
             if (duplicate) continue;
+            if (sleeps.TryGetValue(entry.SessionKey, out var sleep))
+            {
+                if (!entry.IsLock)
+                {
+                    // The real unlock/reconnect wins over an inferred wake and ends duplicate suppression.
+                    if (sleep.ProvisionalWake is { } wake) result.Remove(wake);
+                    sleeps.Remove(entry.SessionKey);
+                }
+                else if (entry.EventId is 4800 or 4779 or 4647)
+                {
+                    if (previous == sleep.Sleep && entry.Timestamp - sleep.Sleep.Timestamp <= TimeSpan.FromSeconds(5)
+                        && (sleep.Wake is null || entry.Timestamp < sleep.Wake.Timestamp))
+                    {
+                        // Prefer the native suspend close: its exact time and record ID keep saved break choices valid.
+                        result[^1] = entry;
+                        sleep.RequiresUnlock = true;
+                        closed[entry.SessionKey] = true;
+                        continue;
+                    }
+                    if (sleep.Wake is { } resumed && entry.Timestamp >= resumed.Timestamp.AddSeconds(-5)
+                        && entry.Timestamp <= resumed.Timestamp.AddSeconds(60))
+                    {
+                        // Wake can precede or follow the lock-screen notification. Neither starts or ends work again.
+                        if (sleep.ProvisionalWake is { } wake) result.Remove(wake);
+                        sleep.ProvisionalWake = null;
+                        sleep.RequiresUnlock = true;
+                        closed[entry.SessionKey] = true;
+                        continue;
+                    }
+                    if (sleep.Wake is { } ended && entry.Timestamp > ended.Timestamp) sleeps.Remove(entry.SessionKey);
+                }
+            }
+            // Disconnecting, signing out or shutting down an already locked or disconnected session does not end work again.
+            if (entry.EventId is 4647 or 4779 && closed.GetValueOrDefault(entry.SessionKey)) continue;
             result.Add(entry);
             closed[entry.SessionKey] = entry.IsLock;
         }
         return result;
     }
+
+    private sealed class SleepState(LockEvent sleep, LockEvent? wake, bool requiresUnlock)
+    {
+        public LockEvent Sleep { get; } = sleep;
+        public LockEvent? Wake { get; } = wake;
+        public bool RequiresUnlock { get; set; } = requiresUnlock;
+        public LockEvent? ProvisionalWake { get; set; }
+    }
+
+    private static LockEvent Adopt(LockEvent entry, LockEvent session) => entry with
+    {
+        UserSid = session.UserSid, UserName = session.UserName, Domain = session.Domain,
+        SessionId = session.SessionId, LogonId = session.LogonId
+    };
 
     public static bool Sequential(IReadOnlyList<LockEvent> events)
     {

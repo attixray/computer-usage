@@ -199,6 +199,42 @@ Check("Sleep and hibernation merge, and a wake to the lock screen restarts work 
         Equal(4801, day.Pairs[0].Unlock.EventId); Equal(At(16,"12:55"), day.Sections[1].From);
     }
 });
+Check("Suspend just before a native close preserves the native timestamp and manual lunch pair", () =>
+{
+    foreach (var closeId in new[] { 4800, 4779, 4647 })
+    {
+        var locked = Event(16,"12:00:00.550",true) with { EventId = closeId };
+        var unlocked = Event(16,"12:40",false);
+        LockEvent[] native = [Event(16,"08:00",false), locked, unlocked, Event(16,"17:00",true)];
+        var before = Report(native); lunches["2026-10-16"] = before.Pairs[0].Id;
+        var day = Report(native.Concat(SleepPeriod(16,"12:00","12:01")));
+        True(!day.Incomplete); Equal(before.Pairs[0].Id, day.Lunch!.Id);
+        Equal(locked.Timestamp, day.Sections[0].To); Equal(unlocked.Timestamp, day.Sections[1].From);
+        Equal(2, day.Sections.Count); lunches.Clear();
+    }
+});
+Check("Suspend, disconnect and lock within one second close work only once, including at day end", () =>
+{
+    var locked = Event(16,"17:00:00.550",true);
+    var day = Report([Event(16,"08:00",false), ..SleepPeriod(16,"17:00","17:01"),
+        locked with {RecordId=id++,EventId=4779,Timestamp=At(16,"17:00:00.160"),SessionId=""}, locked]);
+    True(!day.Incomplete); Equal(locked.RecordId, day.Last!.RecordId);
+    Equal(locked.Timestamp, day.Sections.Single().To);
+});
+Check("Suspend coalescing does not hide distant locks, other sessions or intervening unlocks", () =>
+{
+    LockEvent[] entries = [Event(16,"08:00",false), ..SleepPeriod(16,"12:00","12:40"),
+        Event(16,"12:00:06",true), Event(16,"12:55",false), Event(16,"17:00",true)];
+    True(Report(entries).Incomplete);
+    entries[3] = Event(16,"12:00:00.550",true,"2");
+    True(Report(entries).Incomplete);
+    entries[3] = Event(16,"12:00:00.550",true) with {LogonId="0x2"};
+    True(Report(entries).Incomplete);
+    var transitions = SessionEvents.WorkTransitions([Event(16,"08:00",false),
+        SystemEvent(16,"12:00",LockEvent.Sleep), Event(16,"12:00:00.250",false), Event(16,"12:00:00.550",true)]);
+    Equal(4, transitions.Count); Equal(LockEvent.Sleep, transitions[1].EventId);
+});
+SessionEventChecks.Run(Check);
 Check("An unexpected shutdown ends work at the last-alive time and the next sign-in continues the day", () =>
 {
     var day = Report([Event(16,"08:00",false), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown),
