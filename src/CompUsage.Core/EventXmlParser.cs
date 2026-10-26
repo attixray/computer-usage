@@ -58,7 +58,9 @@ public static class EventXmlParser
                     ? [Entry(LockEvent.Sleep, sleep), Entry(LockEvent.Wake, wake)] : [];
             case ("EventLog", 6008):
                 // Written at the next boot; the binary data holds the last-alive time as local and UTC SYSTEMTIMEs.
-                return LastAlive(data?.Element(ns + "Binary")?.Value) is { } alive ? [Entry(LockEvent.UnexpectedShutdown, alive)] : [];
+                return LastAlive(data?.Element(ns + "Binary")?.Value) is { } alive
+                    ? [Entry(LockEvent.UnexpectedShutdown, alive) with
+                        { RecordedAt = Utc(system?.Element(ns + "TimeCreated")?.Attribute("SystemTime")?.Value ?? "") }] : [];
             case ("Microsoft-Windows-Kernel-General", 13):
                 return Utc(system?.Element(ns + "TimeCreated")?.Attribute("SystemTime")?.Value ?? "") is { } stop
                     ? [Entry(LockEvent.SystemShutdown, stop)] : [];

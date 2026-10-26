@@ -6,11 +6,14 @@ namespace CompUsage.Core;
 // Remote is true when the lock happened in a Remote Desktop session, null for observations saved before it was recorded.
 public sealed record ActivityLock(DateTimeOffset LockedAt, DateTimeOffset? LastInputAt, DateTimeOffset? SampledAt, string SessionId, bool? Remote = null);
 public sealed record ActivityConfiguration(bool Enabled = false);
+// A durable last-alive observation from one monitor run, retained when a numeric session ID is reused.
+public sealed record ActivityHeartbeat(string SessionId, string LogonId, DateTimeOffset StartedAt, DateTimeOffset HeartbeatAt);
 // An input gap in a Remote Desktop session: a locked client computer leaves the remote session unlocked. To is null while it lasts.
 public sealed record IdleBreak(DateTimeOffset From, DateTimeOffset? To, string SessionId);
 public sealed class ActivitySession
 {
     public string SessionId { get; set; } = "";
+    public string LogonId { get; set; } = "";
     public DateTimeOffset StartedAt { get; set; }
     // The monitor's own process, so a restart can end it when it hangs and no longer sees the stop signal.
     public int? ProcessId { get; set; }
@@ -37,6 +40,33 @@ public sealed class ActivitySession
 
 public static class ActivityHistory
 {
+    public static IReadOnlyList<LockEvent> RefineShutdowns(IReadOnlyList<LockEvent> events,
+        IEnumerable<ActivityHeartbeat> observations, DateTimeOffset now)
+    {
+        var heartbeats = observations.ToArray();
+        var userEvents = events.Where(e => !e.IsSystemEvent).OrderBy(e => e.Timestamp).ToArray();
+        return events.Select(entry =>
+        {
+            if (entry.EventId != LockEvent.UnexpectedShutdown || entry.RecordedAt is not { } recorded
+                || recorded <= entry.Timestamp || recorded > now) return entry;
+            var session = userEvents.LastOrDefault(e => e.Timestamp <= entry.Timestamp);
+            if (session is null || session.SessionId.Length == 0) return entry;
+            var latest = heartbeats.Where(h => h.SessionId == session.SessionId
+                    && (h.LogonId.Length == 0 || string.Equals(h.LogonId, session.LogonId, StringComparison.OrdinalIgnoreCase))
+                    && h.StartedAt != default && h.StartedAt <= entry.Timestamp
+                    && h.HeartbeatAt > entry.Timestamp && h.HeartbeatAt < recorded && h.HeartbeatAt <= now
+                    // Legacy journals lack a logon ID. Reject reused or ambiguous sessions, and never carry
+                    // an observation across a different session's start after the original estimate.
+                    && !userEvents.Any(e => e.Timestamp >= h.StartedAt && e.Timestamp <= h.HeartbeatAt
+                        && e.SessionId == h.SessionId && e.SessionKey != session.SessionKey)
+                    && !userEvents.Any(e => e.Timestamp > entry.Timestamp && e.Timestamp <= h.HeartbeatAt
+                        && e.SessionKey != session.SessionKey))
+                .Select(h => h.HeartbeatAt).DefaultIfEmpty(entry.Timestamp).Max();
+            // A heartbeat proves the machine was alive, not the exact instant power was lost. Keep the estimated label.
+            return entry with { Timestamp = latest };
+        }).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
+    }
+
     // LASTINPUTINFO uses a wrapping 32-bit tick count, while system uptime is 64-bit.
     public static DateTimeOffset? InputTime(DateTimeOffset now, ulong uptime, uint inputTick)
     {
@@ -196,26 +226,41 @@ public sealed class ActivityJournal(string directory)
             .Where(n => n.StartsWith("session-", StringComparison.Ordinal) || n.StartsWith("status-", StringComparison.Ordinal))
             .Select(n => n[(n.IndexOf('-') + 1)..]).Where(n => int.TryParse(n, NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id >= 0)
             .Distinct().Select(Load).ToArray();
+    public IReadOnlyList<ActivityHeartbeat> Heartbeats() => (!Directory.Exists(directory) ? [] :
+        Directory.EnumerateFiles(directory, "runs-*.json")
+            .SelectMany(path => Read<List<ActivityHeartbeat>>(path) ?? []))
+        .Concat(ReadAll().Select(s => new ActivityHeartbeat(s.SessionId, s.LogonId, s.StartedAt, s.HeartbeatAt)))
+        .ToArray();
+    public void ArchiveRun(ActivitySession session, DateTimeOffset now)
+    {
+        if (session.StartedAt == default || session.HeartbeatAt < session.StartedAt) return;
+        var name = "runs-" + Path.GetFileName(SessionPath(session.SessionId))["session-".Length..];
+        var kept = (Read<List<ActivityHeartbeat>>(Path.Combine(directory, name)) ?? [])
+            .Append(new(session.SessionId, session.LogonId, session.StartedAt, session.HeartbeatAt))
+            .Where(h => h.HeartbeatAt >= now.AddDays(-61) && h.HeartbeatAt <= now)
+            .GroupBy(h => (h.SessionId, h.LogonId, h.StartedAt)).Select(g => g.MaxBy(h => h.HeartbeatAt)!).ToArray();
+        Write(name, kept);
+    }
     public void Heartbeat(ActivitySession session, DateTimeOffset now)
     {
         session.HeartbeatAt = now;
         // Keep the five-second health update small instead of rewriting sixty days of history each time.
-        Write($"status-{session.SessionId}.json", new { session.SessionId, session.StartedAt, session.HeartbeatAt,
+        Write($"status-{session.SessionId}.json", new { session.SessionId, session.LogonId, session.StartedAt, session.HeartbeatAt,
             session.StoppedAt, session.LastInputAt, session.Enabled, session.Error, session.LockedAt, session.SessionEnded, session.GoalNotifiedOn, session.IdleFrom });
     }
     // Windows overwrites the oldest Security-log records, on a busy computer within a day, so the monitor keeps what it read.
-    public IReadOnlyList<LockEvent> Events() => !Directory.Exists(directory) ? [] :
+    public IReadOnlyList<LockEvent> Events() => !Directory.Exists(directory) ? [] : SessionEvents.MergeRecords(
         Directory.EnumerateFiles(directory, "events-*.json").SelectMany(path =>
         {
             try { return Read<EventCache>(path)?.Events ?? []; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return []; }
-        }).DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
+        }));
     public DateTimeOffset? EventsReadUntil(string session) => Read<EventCache>(EventsPath(session))?.ReadUntil;
     public void SaveEvents(string session, IEnumerable<LockEvent> events, DateTimeOffset readUntil)
     {
         var path = EventsPath(session);
-        var kept = (Read<EventCache>(path)?.Events ?? []).Concat(events).Where(e => e.Timestamp >= readUntil.AddDays(-61))
-            .DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToList();
+        var kept = SessionEvents.MergeRecords((Read<EventCache>(path)?.Events ?? []).Concat(events)
+            .Where(e => e.Timestamp >= readUntil.AddDays(-61))).ToList();
         Write(Path.GetFileName(path), new EventCache(readUntil, kept));
     }
     public void Save(ActivitySession session, DateTimeOffset now)

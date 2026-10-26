@@ -10,6 +10,8 @@ public sealed record LockEvent(
     string SessionId,
     string LogonId)
 {
+    // The log write time bounds retrospective shutdown estimates to the following boot.
+    public DateTimeOffset? RecordedAt { get; init; }
     public DateTimeOffset? ActivityTimestamp { get; init; }
     public DateTimeOffset WorkTimestamp => ActivityTimestamp ?? Timestamp;
     // System-log events have no account: 42 is the start and 1 the end of a sleep/hibernation (both from

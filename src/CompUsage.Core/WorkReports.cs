@@ -49,7 +49,7 @@ public static class WorkReports
         IReadOnlyDictionary<string, string>? meetings = null,
         IReadOnlyDictionary<string, string>? comments = null,
         IEnumerable<BreakNote>? breaks = null, IReadOnlyDictionary<string, string>? reasons = null,
-        IEnumerable<IdleBreak>? idles = null)
+        IEnumerable<IdleBreak>? idles = null, IEnumerable<ActivityHeartbeat>? heartbeats = null)
     {
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
@@ -58,9 +58,10 @@ public static class WorkReports
         var notes = comments ?? new Dictionary<string, string>();
         var breakNotes = (breaks ?? []).ToArray();
         var reasonChoices = reasons ?? new Dictionary<string, string>();
-        var raw = ActivityHistory.Recover(SessionEvents.ResolveSessions(SessionEvents.MergeSleeps(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)
-            .DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp))).OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)),
+        var raw = ActivityHistory.Recover(SessionEvents.ResolveSessions(SessionEvents.MergeSleeps(SessionEvents.MergeRecords(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)))
+            .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)),
             (activity ?? []).Where(r => r.LockedAt <= now), breakNotes.Where(n => n.UnlockedAt <= now), (idles ?? []).Where(i => i.From <= now));
+        raw = ActivityHistory.RefineShutdowns(raw, heartbeats ?? [], now);
         var transitions = SessionEvents.WorkTransitions(raw);
         // Every user record stays visible; machine-wide sleeps and shutdowns only when they affected the user's session.
         var originalDays = raw.Where(e => !e.IsSystemEvent).Concat(transitions.Where(e => e.IsSystemEvent))

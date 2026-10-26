@@ -170,6 +170,7 @@ Check("System-log XML yields exact sleep endpoints, the UTC last-alive time and 
     const string crash = "<Event xmlns=\"http://schemas.microsoft.com/win/2004/08/events/event\"><System><Provider Name=\"EventLog\"/><EventID Qualifiers=\"32768\">6008</EventID><EventRecordID>71</EventRecordID><TimeCreated SystemTime=\"2026-10-09T21:24:58Z\"/></System><EventData><Data></Data><Binary>EA070A0005000900160039000E00B101EA070A0005000900140039000E00B101600900003C000000</Binary></EventData></Event>";
     var lost = EventXmlParser.ParseSystem(crash).Single();
     Equal(LockEvent.UnexpectedShutdown, lost.EventId); Equal(new DateTimeOffset(2026,10,9,20,57,14,433,TimeSpan.Zero), lost.Timestamp);
+    Equal(new DateTimeOffset(2026,10,9,21,24,58,TimeSpan.Zero), lost.RecordedAt!.Value);
     Equal(0, EventXmlParser.ParseSystem(crash.Replace("EA070A0005000900160039000E00B101EA07", "EA07")).Count);
     var stop = EventXmlParser.ParseSystem(wake.Replace("Power-Troubleshooter", "Kernel-General").Replace("<EventID>1<", "<EventID>13<")).Single();
     Equal(LockEvent.SystemShutdown, stop.EventId); Equal(new DateTimeOffset(2026,10,21,6,24,5,TimeSpan.Zero), stop.Timestamp);
@@ -235,6 +236,7 @@ Check("Suspend coalescing does not hide distant locks, other sessions or interve
     Equal(4, transitions.Count); Equal(LockEvent.Sleep, transitions[1].EventId);
 });
 SessionEventChecks.Run(Check);
+ShutdownChecks.Run(Check);
 Check("An unexpected shutdown ends work at the last-alive time and the next sign-in continues the day", () =>
 {
     var day = Report([Event(16,"08:00",false), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown),

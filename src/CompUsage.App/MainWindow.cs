@@ -33,6 +33,7 @@ public sealed class MainWindow : Window
     private IReadOnlyList<BreakNote> breakNotes = [];
     private IReadOnlyList<IdleBreak> idleBreaks = [];
     private IReadOnlyList<LockEvent> cachedEvents = [];
+    private IReadOnlyList<ActivityHeartbeat> activityHeartbeats = [];
     private TrayIcon? tray;
     private static readonly TimeSpan MonitorStartup = TimeSpan.FromSeconds(5);
     private readonly DateTime opened = DateTime.UtcNow;
@@ -174,7 +175,7 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports(AppSettings? settings = null) => WorkReports.Build(state.Events.Concat(cachedEvents), settings ?? state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks, activityHeartbeats);
 
     // The Windows log may reach back less than the history; events stored here or by the monitor cover the days before it.
     private DateTimeOffset? Oldest()
@@ -221,7 +222,7 @@ public sealed class MainWindow : Window
 
     private void ReadActivity()
     {
-        activityLocks = []; breakNotes = []; idleBreaks = []; cachedEvents = [];
+        activityLocks = []; breakNotes = []; idleBreaks = []; cachedEvents = []; activityHeartbeats = [];
         try
         {
             var journal = ActivityMonitor.Journal;
@@ -231,6 +232,7 @@ public sealed class MainWindow : Window
             breakNotes = sessions.SelectMany(s => s.Breaks).ToArray();
             idleBreaks = sessions.SelectMany(s => s.AllIdles(DateTimeOffset.UtcNow)).ToArray();
             cachedEvents = journal.Events();
+            activityHeartbeats = journal.Heartbeats();
             var sessionId = Process.GetCurrentProcess().SessionId.ToString(CultureInfo.InvariantCulture);
             var current = sessions.FirstOrDefault(s => s.SessionId == sessionId);
             var healthy = current?.StoppedAt is null && current is not null
@@ -259,7 +261,7 @@ public sealed class MainWindow : Window
                     readAccessRequired = reply.ReadAccessRequired;
                     if (read is not null)
                     {
-                        state.Events = state.Events.Concat(read.Events).DistinctBy(e => (e.EventId, e.RecordId, e.Timestamp)).OrderBy(e => e.Timestamp).ToList();
+                        state.Events = SessionEvents.MergeRecords(state.Events.Concat(read.Events)).ToList();
                         state.OldestAvailable = read.OldestAvailable; state.LastRefresh = DateTimeOffset.Now;
                     }
                     RecordLogging(reply.Logging);

@@ -223,6 +223,9 @@ public static class ActivityMonitor
             var since = previous is null || previous.HeartbeatAt == default ? null : previous.LockedAt
                 ?? (previous.StoppedAt is null ? previous.HeartbeatAt : previous.SessionEnded ? previous.StoppedAt : null);
             state = journal.Load(session);
+            journal.ArchiveRun(state, DateTimeOffset.UtcNow);
+            using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
+                state.LogonId = SecurityEventService.LogonId(identity) ?? "";
             state.StartedAt = DateTimeOffset.UtcNow; state.ProcessId = Environment.ProcessId; state.StoppedAt = null; state.LastInputAt = null; state.LockedAt = null; state.SessionEnded = false;
             window = new HwndSource(new HwndSourceParameters(title) { Width = 0, Height = 0, WindowStyle = 0 });
             window.AddHook(Messages);
@@ -450,7 +453,7 @@ public static class ActivityMonitor
         // Today's events come from the log and from the journal, which still has the ones the log already overwrote.
         private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
             WorkReports.Build(events.Concat(journal.Events()), shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
-                shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow))
+                shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow), journal.Heartbeats())
             .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));
 
         // Today's worked time from the Security log, with the app's day choices and this monitor's answers; also refreshes the tray list.

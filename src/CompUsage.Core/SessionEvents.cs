@@ -2,6 +2,12 @@ namespace CompUsage.Core;
 
 public static class SessionEvents
 {
+    // A fresh log read can enrich records cached by an older version without creating duplicate events.
+    public static IReadOnlyList<LockEvent> MergeRecords(IEnumerable<LockEvent> events) => events
+        .GroupBy(e => (e.EventId, e.RecordId, e.Timestamp))
+        .Select(g => g.MaxBy(e => e.RecordedAt ?? DateTimeOffset.MinValue)!)
+        .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
+
     public static IEnumerable<LockEvent> ForUser(IEnumerable<LockEvent> events, string sid, string account)
     {
         foreach (var entry in events)
