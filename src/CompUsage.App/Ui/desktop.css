@@ -48,6 +48,10 @@ html,body{margin:0;min-height:100%;font-family:'Segoe UI',sans-serif;background:
 #compusage-cards-preview .cu-metric-row .cu-pill,#compusage-cards-preview .cu-metric-row .cu-sub{margin:0}
 #compusage-cards-preview .cu-head-line{display:flex;align-items:center;flex-wrap:wrap;gap:6px 22px}
 #compusage-cards-preview .cu-head-line h1{margin:0}
+#compusage-cards-preview .cu-title{display:inline-flex;align-items:baseline;gap:10px}
+#compusage-cards-preview .cu-version{white-space:nowrap;user-select:text}
+#compusage-cards-preview .cu-save-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px}
+#compusage-cards-preview .cu-save-actions .cu-check{margin:0;white-space:nowrap}
 #compusage-cards-preview .cu-activity-status{display:inline-flex;align-items:center;flex-wrap:wrap;gap:8px 16px;font-size:.83em;color:var(--cu-muted)}
 #compusage-cards-preview .cu-activity-status button{padding:2px 8px}
 #compusage-cards-preview .cu-activity-status svg{vertical-align:middle}

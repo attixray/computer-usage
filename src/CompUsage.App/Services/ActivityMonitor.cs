@@ -166,10 +166,19 @@ public static class ActivityMonitor
             if (duplicate is null || !duplicate.WaitForExit(5000) || duplicate.ExitCode != 0) return 7;
             // Exercise the collector's notification path without locking the user's desktop.
             var window = FindWindow(null, WindowTitle(directory));
-            if (window == IntPtr.Zero || !PostMessage(window, 0x02B1, new IntPtr(7), new IntPtr(int.Parse(SessionId, CultureInfo.InvariantCulture)))) return 7;
+            var openCount = journal.Load(SessionId).Opens.Count;
+            var usable = IsInteractive(int.Parse(SessionId, CultureInfo.InvariantCulture));
+            if (window == IntPtr.Zero || !PostMessage(window, 0x02B1, new IntPtr(7), new IntPtr(int.Parse(SessionId, CultureInfo.InvariantCulture)))
+                || !PostMessage(window, 0x02B1, new IntPtr(7), new IntPtr(int.Parse(SessionId, CultureInfo.InvariantCulture)))) return 7;
             wait.Restart();
-            while (wait.Elapsed < TimeSpan.FromSeconds(5) && journal.Load(SessionId).Locks.Count == 0) Thread.Sleep(50);
+            while (wait.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                var observed = journal.Load(SessionId);
+                if (observed.Locks.Count > 0 && (!usable || observed.Opens.Count > openCount)) break;
+                Thread.Sleep(50);
+            }
             if (journal.Load(SessionId).Locks.Count != 1) return 7;
+            if (usable && journal.Load(SessionId).Opens.Count <= openCount) return 7;
             if (Stop(directory) != 0 || !child.WaitForExit(5000) || child.ExitCode != 0) return 7;
             if (journal.ReadAll().Single().StoppedAt is null) return 7;
             // Disabling survives a later Windows-startup invocation, without starting a collector.
@@ -205,6 +214,8 @@ public static class ActivityMonitor
         // When the session last became usable (monitor start, unlock or reconnect); RDP idle gaps never start before it.
         private DateTimeOffset activeSince = DateTimeOffset.UtcNow;
         private bool locked;
+        private bool openObservationNeeded = true;
+        private bool lockNotificationActive;
         private bool registered;
         private int ticks;
         private readonly bool interactive;
@@ -235,7 +246,8 @@ public static class ActivityMonitor
             {
                 tray = new TrayIcon(window, () => settings().Language == "en"
                     ? ("CompUsage – work log", "Open CompUsage", "Stop background monitor")
-                    : ("CompUsage – munkaidőnapló", "CompUsage megnyitása", "Háttérfigyelő leállítása"), OpenApp, app.Shutdown, TodayBreaks);
+                    : ("CompUsage – munkaidőnapló", "CompUsage megnyitása", "Háttérfigyelő leállítása"), OpenApp, app.Shutdown, TodayBreaks,
+                    () => settings().Language == "en" ? $"CompUsage background monitor v{AppVersion.Current}" : $"CompUsage háttérfigyelő v{AppVersion.Current}");
                 // A sign-in shortly after a restart or sign-out ends a break as well; started later, the monitor stays quiet.
                 if (since is { } from && LogonTime(id) is { } logon && from < logon && DateTimeOffset.UtcNow - logon < TimeSpan.FromMinutes(5))
                     new DispatcherTimer(TimeSpan.FromSeconds(3), DispatcherPriority.Normal, (sender, _) =>
@@ -258,9 +270,25 @@ public static class ActivityMonitor
                 state.Enabled = journal.Configuration().Enabled;
                 if (!state.Enabled) { sampledAt = null; state.LastInputAt = null; }
                 if (!state.Enabled && !Needed(settings())) { app.Shutdown(); return; }
-                // Input times are only sampled when activity tracking is on; prompts need session notifications alone.
-                if (state.Enabled && !locked && IsInteractive(int.Parse(state.SessionId, CultureInfo.InvariantCulture))) Sample();
+                var usable = InteractiveState(int.Parse(state.SessionId, CultureInfo.InvariantCulture));
+                var observedOpen = false;
+                if (usable == false) openObservationNeeded = true;
+                if (usable == true && openObservationNeeded)
+                {
+                    // Recheck Windows instead of trusting notification order during an RDP/console handoff.
+                    // Retain the first verified usable instant even if no Security unlock record was written.
+                    var observedAt = DateTimeOffset.UtcNow;
+                    state.Opens.Add(new(observedAt, state.SessionId, state.LogonId));
+                    openObservationNeeded = false; lockNotificationActive = false;
+                    var from = state.LockedAt;
+                    locked = false; sampledAt = null; state.LastInputAt = null; state.LockedAt = null; activeSince = observedAt;
+                    observedOpen = true;
+                    if (from is { } start) app.Dispatcher.BeginInvoke(() => Prompt(start, observedAt));
+                }
+                // Input times are only sampled when activity tracking is on; session-state observations contain no input.
+                if (state.Enabled && !locked && usable == true) Sample();
                 state.Error = registered ? null : "Session notifications are unavailable; retrying.";
+                if (observedOpen) Save(true);
                 if (ticks % 60 == 1 && !locked) UpdateGoal();
                 if (ticks % 60 == 31) CacheEvents();
                 if (ticks++ % 5 == 0) Save();
@@ -302,21 +330,24 @@ public static class ActivityMonitor
             {
                 if (wParam.ToInt32() == 7)
                 {
+                    openObservationNeeded = true;
                     locked = true; state.LockedAt ??= DateTimeOffset.UtcNow; state.IdleFrom = null;
-                    if (state.Enabled && journal.Configuration().Enabled)
-                        state.Locks.Add(ActivityHistory.Capture(DateTimeOffset.UtcNow, state.LastInputAt, sampledAt, state.SessionId, remote));
+                    if (!lockNotificationActive && state.Enabled && journal.Configuration().Enabled)
+                        state.Locks.Add(ActivityHistory.Capture(DateTimeOffset.UtcNow, state.LastInputAt, sampledAt, state.SessionId, remote, state.LogonId));
+                    lockNotificationActive = true;
                     sampledAt = null; Save(true);
                 }
                 else if (wParam.ToInt32() is 8 or 1 or 3)
                 {
-                    var from = state.LockedAt;
-                    locked = false; sampledAt = null; state.LastInputAt = null; state.LockedAt = null; activeSince = DateTimeOffset.UtcNow; Tick(); Save();
-                    if (from is { } start) { var to = DateTimeOffset.UtcNow; app.Dispatcher.BeginInvoke(() => Prompt(start, to)); }
+                    // Connection alone need not mean an unlocked desktop. Tick verifies it before opening work.
+                    openObservationNeeded = true;
+                    Tick();
                     UpdateGoal();
                 }
                 else if (wParam.ToInt32() == 6) { state.SessionEnded = true; Save(); }
                 else if (wParam.ToInt32() is 2 or 4)
                 {
+                    openObservationNeeded = true;
                     if (state.IdleFrom is { } from) { state.Idles.Add(new(from, DateTimeOffset.UtcNow, state.SessionId)); state.IdleFrom = null; }
                     locked = true; state.LockedAt ??= DateTimeOffset.UtcNow; sampledAt = null; state.LastInputAt = null; Save(true);
                 }
@@ -453,7 +484,8 @@ public static class ActivityMonitor
         // Today's events come from the log and from the journal, which still has the ones the log already overwrote.
         private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
             WorkReports.Build(events.Concat(journal.Events()), shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
-                shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow), journal.Heartbeats())
+                shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow), journal.Heartbeats(),
+                journal.ReadAll().SelectMany(s => s.Opens).Concat(state.Opens))
             .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));
 
         // Today's worked time from the Security log, with the app's day choices and this monitor's answers; also refreshes the tray list.
@@ -519,14 +551,18 @@ public static class ActivityMonitor
 
     private static string WindowTitle(string? testDirectory) => "CompUsage activity monitor" + (testDirectory is null ? "" : " " + Path.GetFileName(testDirectory));
 
-    private static bool IsInteractive(int session)
+    private static bool IsInteractive(int session) => InteractiveState(session) == true;
+
+    private static bool? InteractiveState(int session)
     {
-        if (!WTSQuerySessionInformation(IntPtr.Zero, session, 25, out var buffer, out var bytes)) return false;
+        if (!WTSQuerySessionInformation(IntPtr.Zero, session, 25, out var buffer, out var bytes)) return null;
         try
         {
             // WTSINFOEXW's union is aligned to eight bytes on x64; only its fixed header is needed.
-            return bytes >= 20 && Marshal.ReadInt32(buffer) == 1 && Marshal.ReadInt32(buffer, 12) == 0
-                && Marshal.ReadInt32(buffer, 16) == 1;
+            if (bytes < 20 || Marshal.ReadInt32(buffer) != 1) return null;
+            var flags = Marshal.ReadInt32(buffer, 16);
+            if (flags is not (0 or 1)) return null;
+            return Marshal.ReadInt32(buffer, 12) == 0 && flags == 1;
         }
         finally { WTSFreeMemory(buffer); }
     }

@@ -2,6 +2,8 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Alkalmazás verziója':'Application version',
+    'Mentett XLS megnyitása':'Open saved workbook',
     'Az ebédet és a napi meetinget (standup) az Ok oszlopban lehet kiválasztani; a — kézi választás kizárja a párt a becslésből.':'Choose the lunch and the daily meeting (stand-up) in the Reason column; a manual — keeps the pair out of the estimate.',
     'Napló':'Log',
     'Összesítés':'Summary',
@@ -86,6 +88,7 @@ window.i18n = (() => {
     'A korábban választott meetingpár már nem található vagy ebédként van kijelölve; válaszd ki újra.':'The previously selected meeting pair is missing or marked as lunch; select it again.',
     'Előbb engedélyezd a napi meeting figyelmen kívül hagyását a beállításokban.':'Enable Ignore daily meeting in Settings first.',
     'Munkamenet csatlakoztatása':'Session connected','Munkamenet leválasztása':'Session disconnected',
+    'Feloldott állapot észlelve':'Unlocked session observed',
     'Első kapcsolódás':'First connection','Első észlelt kapcsolódás':'First observed connection',
     'Utolsó leválasztás':'Last disconnect','Legutóbbi leválasztás':'Most recent disconnect',
     'Nincs aktivitási adat · leválasztás alapján':'No activity data · using disconnect time',
@@ -206,6 +209,7 @@ window.i18n = (() => {
         [/^(.+) eseményei$/,'Events for $1'],[/^(.+) másolása$/,(_,label)=>`${text(label,'en')} — copy`],
         [/^Másolás: (.+)$/,'Copy: $1'],[/^Frissítve: (.+)$/,'Updated: $1'],[/^Saját Windows-fiók · (.+)$/,'Current Windows account · $1'],
         [/^Mentés kész\. Biztonsági másolat: (.+)$/,'Saved. Backup: $1'],
+        [/^A fájl mentése sikerült, de nem sikerült megnyitni: (.+)$/,'The workbook was saved, but could not be opened: $1'],
         [/^A napló frissítése nem sikerült: (.+)$/,(_,detail)=>'Could not refresh the event log: '+text(detail,'en')]
       ];
       for(const [pattern,replacement] of rules)if(pattern.test(s)){translated=s.replace(pattern,replacement);break;}

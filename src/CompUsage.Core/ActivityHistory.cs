@@ -4,7 +4,12 @@ using System.Text.Json;
 namespace CompUsage.Core;
 
 // Remote is true when the lock happened in a Remote Desktop session, null for observations saved before it was recorded.
-public sealed record ActivityLock(DateTimeOffset LockedAt, DateTimeOffset? LastInputAt, DateTimeOffset? SampledAt, string SessionId, bool? Remote = null);
+public sealed record ActivityLock(DateTimeOffset LockedAt, DateTimeOffset? LastInputAt, DateTimeOffset? SampledAt, string SessionId, bool? Remote = null)
+{
+    public string LogonId { get; init; } = "";
+}
+// The monitor verified an active, unlocked desktop at this instant; this is not an inferred unlock time.
+public sealed record ActivityOpen(DateTimeOffset ObservedAt, string SessionId, string LogonId);
 public sealed record ActivityConfiguration(bool Enabled = false);
 // A durable last-alive observation from one monitor run, retained when a numeric session ID is reused.
 public sealed record ActivityHeartbeat(string SessionId, string LogonId, DateTimeOffset StartedAt, DateTimeOffset HeartbeatAt);
@@ -29,6 +34,7 @@ public sealed class ActivitySession
     // Work date (yyyy-MM-dd) of the last daily-goal notification, so a restart does not repeat it.
     public string? GoalNotifiedOn { get; set; }
     public List<ActivityLock> Locks { get; set; } = [];
+    public List<ActivityOpen> Opens { get; set; } = [];
     public List<BreakNote> Breaks { get; set; } = [];
     public List<IdleBreak> Idles { get; set; } = [];
     // Last input before the current RDP input gap, once the gap reached the configured length.
@@ -74,21 +80,78 @@ public static class ActivityHistory
         return age <= uptime ? now.AddMilliseconds(-age) : null;
     }
 
-    public static ActivityLock Capture(DateTimeOffset lockedAt, DateTimeOffset? input, DateTimeOffset? sampledAt, string session, bool? remote = null)
+    public static ActivityLock Capture(DateTimeOffset lockedAt, DateTimeOffset? input, DateTimeOffset? sampledAt, string session, bool? remote = null, string logonId = "")
     {
         // Never present an old sample after suspend, a stalled process or a failed API call as a fresh observation.
         var fresh = sampledAt is { } sample && sample <= lockedAt && lockedAt - sample <= TimeSpan.FromSeconds(3)
             && input is { } last && last <= sample;
-        return new(lockedAt, fresh ? input : null, fresh ? sampledAt : null, session, remote);
+        return new(lockedAt, fresh ? input : null, fresh ? sampledAt : null, session, remote) { LogonId = logonId };
+    }
+
+    public static IReadOnlyList<ActivityLock> CoalesceLocks(IEnumerable<ActivityLock> records)
+    {
+        var result = new List<ActivityLock>();
+        foreach (var session in records.GroupBy(r => r.SessionId))
+        {
+            var ordered = session.OrderBy(r => r.LockedAt).ToArray();
+            for (var i = 0; i < ordered.Length;)
+            {
+                var first = i++;
+                while (i < ordered.Length && ordered[i].LockedAt - ordered[first].LockedAt <= TimeSpan.FromMilliseconds(100)) i++;
+                var group = ordered[first..i];
+                var inputs = group.Where(r => r.LastInputAt is not null || r.SampledAt is not null).ToArray();
+                var logons = group.Where(r => r.LogonId.Length > 0).Select(r => r.LogonId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                // Repeated notifications commonly contain one sample and an empty copy after it was cleared.
+                // Conflicting samples, protocols or logons stay ambiguous; the window is anchored, never chained.
+                if (logons.Length > 1 || group.Where(r => r.Remote is not null).Select(r => r.Remote).Distinct().Count() > 1
+                    || inputs.Select(r => (r.LastInputAt, r.SampledAt)).Distinct().Count() > 1)
+                    result.AddRange(group);
+                else
+                {
+                    var best = inputs.FirstOrDefault() ?? group[0];
+                    result.Add(best with { Remote = best.Remote ?? group.FirstOrDefault(r => r.Remote is not null)?.Remote,
+                        LogonId = logons.FirstOrDefault() ?? "" });
+                }
+            }
+        }
+        return result.OrderBy(r => r.LockedAt).ToArray();
     }
 
     public static ActivityLock? Match(IEnumerable<ActivityLock> records, LockEvent entry)
     {
         if (!entry.IsLock) return null;
-        var matches = records.Where(r => r.SessionId == entry.SessionId && Math.Abs((r.LockedAt - entry.Timestamp).TotalSeconds) <= 5)
-            .OrderBy(r => Math.Abs((r.LockedAt - entry.Timestamp).Ticks)).Take(2).ToArray();
+        var matches = CoalesceLocks(records.Where(r => r.SessionId == entry.SessionId
+            && (r.LogonId.Length == 0 || string.Equals(r.LogonId, entry.LogonId, StringComparison.OrdinalIgnoreCase))
+            && Math.Abs((r.LockedAt - entry.Timestamp).TotalSeconds) <= 5)).Take(2).ToArray();
         // Closely repeated transitions are ambiguous: do not attach one observation to two possible lock events.
         return matches.Length == 1 ? matches[0] : null;
+    }
+
+    public static IReadOnlyList<LockEvent> RecoverOpenStates(IReadOnlyList<LockEvent> events,
+        IEnumerable<ActivityOpen> observations, DateTimeOffset now)
+    {
+        var result = events.ToList();
+        var timeline = SessionEvents.WorkTransitions(result);
+        foreach (var open in observations.Where(o => o.ObservedAt <= now && o.SessionId.Length > 0 && o.LogonId.Length > 0)
+                     .Distinct().OrderBy(o => o.ObservedAt))
+        {
+            var templates = events.Where(e => !e.IsSystemEvent && e.UserSid.Length > 0 && e.SessionId == open.SessionId
+                && string.Equals(e.LogonId, open.LogonId, StringComparison.OrdinalIgnoreCase)).DistinctBy(e => e.SessionKey).ToArray();
+            if (templates.Length != 1) continue;
+            var template = templates[0];
+            var previous = timeline.LastOrDefault(e => e.SessionKey == template.SessionKey && e.Timestamp <= open.ObservedAt);
+            if (previous is null || previous.EventId is not (4800 or 4779 or LockEvent.Sleep or LockEvent.Wake)) continue;
+            // Observations cannot revive a signed-out session or bridge a reboot. A nearby real unlock wins.
+            if (events.Any(e => e.Timestamp > previous.Timestamp && e.Timestamp <= open.ObservedAt
+                && (e.EventId is LockEvent.UnexpectedShutdown or LockEvent.SystemShutdown
+                    || e.EventId == 4647 && e.SessionKey == template.SessionKey))) continue;
+            var next = timeline.FirstOrDefault(e => e.SessionKey == template.SessionKey && e.Timestamp > open.ObservedAt);
+            if (next is { IsLock: false } && next.Timestamp - open.ObservedAt <= TimeSpan.FromSeconds(5)) continue;
+            result.Add(template with { RecordId = -2 * open.ObservedAt.ToUnixTimeMilliseconds() - 1,
+                Timestamp = open.ObservedAt, EventId = LockEvent.ObservedUnlock, ActivityTimestamp = null, RecordedAt = null });
+            timeline = SessionEvents.WorkTransitions(result);
+        }
+        return result.OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
     }
 
     public static string IdleText(ActivityLock record)
@@ -218,7 +281,7 @@ public sealed class ActivityJournal(string directory)
         var history = Read<ActivitySession>(SessionPath(session)) ?? new() { SessionId = session };
         var status = Read<ActivitySession>(Path.Combine(directory, $"status-{session}.json"));
         if (status is null || status.HeartbeatAt < history.HeartbeatAt) return history;
-        status.Locks = history.Locks; status.Breaks = history.Breaks; status.Idles = history.Idles;
+        status.Locks = history.Locks; status.Opens = history.Opens; status.Breaks = history.Breaks; status.Idles = history.Idles;
         return status;
     }
     public IReadOnlyList<ActivitySession> ReadAll() => !Directory.Exists(directory) ? [] :
@@ -266,6 +329,8 @@ public sealed class ActivityJournal(string directory)
     public void Save(ActivitySession session, DateTimeOffset now)
     {
         session.Locks.RemoveAll(r => r.LockedAt < now.AddDays(-61));
+        session.Locks = ActivityHistory.CoalesceLocks(session.Locks).ToList();
+        session.Opens.RemoveAll(r => r.ObservedAt < now.AddDays(-61));
         session.Idles.RemoveAll(r => r.From < now.AddDays(-61));
         session.Breaks.RemoveAll(b => b.UnlockedAt < now.AddDays(-61));
         Write(Path.GetFileName(SessionPath(session.SessionId)), session);

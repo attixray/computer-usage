@@ -12,6 +12,7 @@ public sealed record AppSettings
     public int MaximumMeetingMinutes { get; init; } = 20;
     public int HistoryDays { get; init; } = 60;
     public string WorkbookPath { get; init; } = "";
+    public bool OpenSavedWorkbook { get; init; } = true;
     public double FontScale { get; init; } = 1.15;
     public bool RememberView { get; init; } = true;
     public string Language { get; init; } = "hu";

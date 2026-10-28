@@ -9,6 +9,7 @@ public sealed class TrayIcon : IDisposable
     private const int CallbackMessage = 0x8000 + 0x43, OpenCommand = 1, ExitCommand = 2, FirstEntry = 100;
     private readonly HwndSource source;
     private readonly Func<(string Tip, string Open, string Exit)> labels;
+    private readonly Func<string> heading;
     private readonly Action open, exit;
     private readonly Func<IReadOnlyList<(string Text, Action? Run)>>? entries;
     private string? tip;
@@ -18,9 +19,10 @@ public sealed class TrayIcon : IDisposable
 
     // Entries are listed under Open; one without an action is shown greyed out, as a heading or note.
     public TrayIcon(HwndSource source, Func<(string Tip, string Open, string Exit)> labels, Action open, Action exit,
-        Func<IReadOnlyList<(string Text, Action? Run)>>? entries = null)
+        Func<IReadOnlyList<(string Text, Action? Run)>>? entries = null, Func<string>? heading = null)
     {
         this.source = source; this.labels = labels; this.open = open; this.exit = exit; this.entries = entries;
+        this.heading = heading ?? (() => $"CompUsage v{AppVersion.Current}");
         ExtractIconEx(Environment.ProcessPath!, 0, out var large, out icon, 1);
         if (large != IntPtr.Zero) DestroyIcon(large);
         source.AddHook(Messages);
@@ -77,6 +79,8 @@ public sealed class TrayIcon : IDisposable
         var menu = CreatePopupMenu();
         try
         {
+            AppendMenu(menu, 0x1, 0, heading());
+            AppendMenu(menu, 0x800, 0, null);
             AppendMenu(menu, 0, OpenCommand, text.Open);
             if (listed.Count > 0) AppendMenu(menu, 0x800, 0, null);
             for (var i = 0; i < listed.Count; i++) AppendMenu(menu, listed[i].Run is null ? 0x1 : 0, FirstEntry + i, listed[i].Text);

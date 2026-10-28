@@ -237,6 +237,7 @@ Check("Suspend coalescing does not hide distant locks, other sessions or interve
 });
 SessionEventChecks.Run(Check);
 ShutdownChecks.Run(Check);
+SessionObservationChecks.Run(Check);
 Check("An unexpected shutdown ends work at the last-alive time and the next sign-in continues the day", () =>
 {
     var day = Report([Event(16,"08:00",false), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown),

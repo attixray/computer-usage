@@ -34,6 +34,7 @@ public sealed class MainWindow : Window
     private IReadOnlyList<IdleBreak> idleBreaks = [];
     private IReadOnlyList<LockEvent> cachedEvents = [];
     private IReadOnlyList<ActivityHeartbeat> activityHeartbeats = [];
+    private IReadOnlyList<ActivityOpen> activityOpens = [];
     private TrayIcon? tray;
     private static readonly TimeSpan MonitorStartup = TimeSpan.FromSeconds(5);
     private readonly DateTime opened = DateTime.UtcNow;
@@ -175,7 +176,7 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports(AppSettings? settings = null) => WorkReports.Build(state.Events.Concat(cachedEvents), settings ?? state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks, activityHeartbeats);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks, activityHeartbeats, activityOpens);
 
     // The Windows log may reach back less than the history; events stored here or by the monitor cover the days before it.
     private DateTimeOffset? Oldest()
@@ -222,13 +223,14 @@ public sealed class MainWindow : Window
 
     private void ReadActivity()
     {
-        activityLocks = []; breakNotes = []; idleBreaks = []; cachedEvents = []; activityHeartbeats = [];
+        activityLocks = []; breakNotes = []; idleBreaks = []; cachedEvents = []; activityHeartbeats = []; activityOpens = [];
         try
         {
             var journal = ActivityMonitor.Journal;
             var enabled = journal.Configuration().Enabled;
             var sessions = journal.ReadAll();
             activityLocks = sessions.SelectMany(s => s.Locks).ToArray();
+            activityOpens = sessions.SelectMany(s => s.Opens).ToArray();
             breakNotes = sessions.SelectMany(s => s.Breaks).ToArray();
             idleBreaks = sessions.SelectMany(s => s.AllIdles(DateTimeOffset.UtcNow)).ToArray();
             cachedEvents = journal.Events();
@@ -382,8 +384,13 @@ public sealed class MainWindow : Window
                     Title = state.Settings.Language == "en" ? "Select a work-log workbook" : "Munkaidőfájl kiválasztása" };
                 return dialog.ShowDialog(this) == true ? dialog.FileName : null;
             case "openFile":
-                if (!File.Exists(state.Settings.WorkbookPath)) throw new FileNotFoundException("A beállított .xlsx fájl nem található.");
-                Process.Start(new ProcessStartInfo(state.Settings.WorkbookPath) { UseShellExecute = true }); return true;
+                OpenWorkbook(state.Settings.WorkbookPath); return true;
+            case "openSavedWorkbook":
+                var previousSettings = state.Settings;
+                state.Settings = state.Settings with { OpenSavedWorkbook = data.GetProperty("enabled").GetBoolean() };
+                try { store.Save(state); }
+                catch { state.Settings = previousSettings; throw; }
+                return state.Settings.OpenSavedWorkbook;
             case "preview":
                 activePlan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, Reports()));
                 planToken = Guid.NewGuid().ToString("N"); return PlanSnapshot(activePlan, planToken);
@@ -392,7 +399,15 @@ public sealed class MainWindow : Window
                 var selected = data.GetProperty("partials").Deserialize<int[]>(Json) ?? [];
                 var plan = activePlan; activePlan = null;
                 var backup = await Task.Run(() => workbook.Commit(plan, selected));
-                await UpdateWorkbookInfoAsync(); return new { state = Snapshot(), backup };
+                await UpdateWorkbookInfoAsync();
+                string? openError = null;
+                if (state.Settings.OpenSavedWorkbook)
+                {
+                    // Opening is a separate outcome: a shell/association failure must not suggest repeating the save.
+                    try { OpenWorkbook(plan.Path); }
+                    catch (Exception ex) { openError = ex.Message; }
+                }
+                return new { state = Snapshot(), backup, openError };
             case "view":
                 if (state.Settings.RememberView)
                 {
@@ -403,6 +418,12 @@ public sealed class MainWindow : Window
                 return true;
             default: throw new ArgumentException("Ismeretlen művelet.");
         }
+    }
+
+    private static void OpenWorkbook(string path)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException("A beállított .xlsx fájl nem található.");
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true })?.Dispose();
     }
 
     private void RecordLogging(bool? enabled)
@@ -470,7 +491,7 @@ public sealed class MainWindow : Window
 
     private object SnapshotData(IReadOnlyList<WorkReport> reports) => new
     {
-        settings = state.Settings, logging = state.Logging, error = lastError, activity = activityInfo, summary = Summary(),
+        version = AppVersion.Current, settings = state.Settings, logging = state.Logging, error = lastError, activity = activityInfo, summary = Summary(),
         permissions = new { readAccessRequired },
         user = Environment.UserName, refreshed = state.LastRefresh?.ToLocalTime().ToString("yyyy.MM.dd HH:mm:ss", CultureInfo.InvariantCulture),
         oldest = state.OldestAvailable?.ToLocalTime().ToString("yyyy.MM.dd HH:mm", CultureInfo.InvariantCulture),
@@ -482,7 +503,8 @@ public sealed class MainWindow : Window
             incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.WorkTimestamp, true),
             firstFromSession = d.First?.IsSessionTransition ?? false, lastFromSession = d.Last?.IsSessionTransition ?? false,
             firstFromSignIn = d.First?.IsSignInOrOut ?? false, lastFromSignOut = d.Last?.IsSignInOrOut ?? false,
-            firstSystem = d.First?.IsSystemEvent == true ? d.First.Label : null, lastSystem = d.Last?.IsSystemEvent == true ? d.Last.Label : null,
+            firstSystem = d.First?.IsSystemEvent == true || d.First?.EventId == LockEvent.ObservedUnlock ? d.First.Label : null,
+            lastSystem = d.Last?.IsSystemEvent == true ? d.Last.Label : null,
             lastFromActivity = d.Last?.ActivityTimestamp is not null, lastActivity = ActivityValue(d.Last),
             manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.WorkTimestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },

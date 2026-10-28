@@ -8,9 +8,11 @@ const {parseHTML} = require('linkedom');
   const document = window.document;
   // LinkeDOM models the DOM without launching a browser or interacting with the real clipboard.
   let receive, clipboard = '', writes = 0, calls = [], meetingUndo=null, failComment=false, previewPartials=[];
+  let openedWorkbooks=0, failOpen=false, failCommit=false, failOpenPreference=false;
   const time = (display, exact) => ({display,exact,date:'2026.10.16'});
   let state = {settings:{dayStart:'04:00:00',expectedLunch:'11:30:00',minimumLunchMinutes:15,splitBreakMinutes:10,ignoreDailyMeeting:false,meetingStartFrom:'09:25:00',meetingStartUntil:'09:40:00',maximumMeetingMinutes:20,historyDays:60,workbookPath:'C:\\test\\work.xlsx',fontScale:1.15,rememberView:true,language:'hu',theme:'auto',lockTimeSource:'lock',remoteIdleMinutes:10},logging:true,permissions:{readAccessRequired:false},activity:{enabled:false,running:false,registered:true},user:'Test',expanded:[],scroll:0,refreshed:'2026.10.19 14:00:00',oldest:null,workbook:{available:true,lastDate:'2026.10.15',days:1,rows:2,partials:0},days:[{key:'2026-10-16',date:'2026.10.16',weekday:'péntek',status:'Lezárt',ongoing:false,incomplete:false,issues:[],first:time('8:02','08:02:14'),last:time('16:48','16:48:09'),manual:false,none:false,undo:false,lunch:{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19},pairs:[{id:'short',from:time('10:16','10:16:03'),to:time('10:20','10:20:09'),minutes:4},{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19}],sections:[{date:'2026.10.16',from:time('8:02','08:02:14'),to:time('11:32','11:32:05'),duration:'03:30',open:false,copy:'2026.10.16\t08:02:14\t11:32:05'},{date:'2026.10.16',from:time('11:51','11:51:34'),to:time('16:48','16:48:09'),duration:'04:57',open:false,copy:'2026.10.16\t11:51:34\t16:48:09'}],copy:'2026.10.16\t08:02:14\t11:32:05\r\n2026.10.16\t11:51:34\t16:48:09',eventCopy:'events',events:[]}]};
   const clone = value => JSON.parse(JSON.stringify(value));
+  state.version='1.2.5';state.settings.openSavedWorkbook=true;
   for(const day of state.days)day.sections.forEach((s,i)=>{s.id=day.key+'|'+i;s.comment='';s.durationExact=i?'4:56:35':'3:29:51';});
   function applyActivityReply(message) {
     state.activity.enabled=message.data.activityEnabled;
@@ -23,7 +25,7 @@ const {parseHTML} = require('linkedom');
     day.copy=day.sections.map(s=>s.copy).join('\r\n');
   }
 
-  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'commentsPending':case 'commentsFailed':break;case 'sectionComment':{if(failComment)throw Error('Comment save failed');const row=state.days.flatMap(d=>d.sections).find(s=>s.id===message.data.sectionId);row.comment=message.data.comment;break;}case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:clone(previewPartials)};break;case 'commit':writes++;result={state:clone(state),backup:'C:\\test\\backup.xlsx'};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'meeting':{
+  window.chrome = {webview:{addEventListener(name,handler){receive=handler;},postMessage(message){calls.push(message);let result=true;try{switch(message.command){case 'load':case 'refresh':result=clone(state);break;case 'copy':clipboard=message.data.text;break;case 'paste':result=clipboard;break;case 'settings':state.settings=clone(message.data.settings);state.logging=message.data.logging;applyActivityReply(message);result=clone(state);break;case 'history':state.settings.historyDays=message.data.days;result=clone(state);break;case 'commentsPending':case 'commentsFailed':break;case 'sectionComment':{if(failComment)throw Error('Comment save failed');const row=state.days.flatMap(d=>d.sections).find(s=>s.id===message.data.sectionId);row.comment=message.data.comment;break;}case 'preview':result={token:'plan',rows:clone(state.days[0].sections),partials:clone(previewPartials)};break;case 'openSavedWorkbook':if(failOpenPreference)throw Error('Preference save failed');state.settings.openSavedWorkbook=message.data.enabled;result=message.data.enabled;break;case 'commit':if(failCommit)throw Error('Workbook is locked');writes++;if(state.settings.openSavedWorkbook&&!failOpen)openedWorkbooks++;result={state:clone(state),backup:'C:\\test\\backup.xlsx',openError:state.settings.openSavedWorkbook&&failOpen?'No file association':null};break;case 'lunch':state.days[0].manual=message.data.value!==null;state.days[0].undo=true;result=clone(state);break;case 'meeting':{
       const day=state.days[0];meetingUndo=clone(day);day.manualMeeting=message.data.value!==null;day.noMeeting=message.data.value==='none';
       const pair=message.data.value===null?day.pairs[0]:day.pairs.find(p=>p.id===message.data.value);
       day.meeting=pair?{id:pair.id,from:clone(pair.from),to:clone(pair.to),minutes:pair.minutes}:null;
@@ -110,6 +112,39 @@ const {parseHTML} = require('linkedom');
     await click('[data-cancel]');assert.equal(document.querySelector('[data-read-access-warning]'),null);
   });
   await check('Excel preview never writes until the commit button is pressed',async()=>{await click('[data-append]');assert.equal(writes,0);assert.ok(document.querySelector('[data-commit]'));await click('[data-commit]');assert.equal(writes,1);assert.equal(calls.findLast(c=>c.command==='commit').data.token,'plan');});
+  await check('Saved-workbook opening is remembered even when the preview is cancelled',async()=>{
+    assert.equal(node('[data-version]').textContent,'v1.2.5');
+    assert.equal(openedWorkbooks,1);
+    await click('[data-append]');assert.ok(node('[data-open-saved-workbook]').hasAttribute('checked'));
+    const toggle=node('[data-open-saved-workbook]');toggle.checked=false;
+    toggle.dispatchEvent(new window.Event('change',{bubbles:true}));await flush();
+    assert.equal(state.settings.openSavedWorkbook,false);
+    await click('[data-close-plan]');await click('[data-append]');
+    assert.equal(node('[data-open-saved-workbook]').hasAttribute('checked'),false);
+    const before=openedWorkbooks;await click('[data-commit]');assert.equal(openedWorkbooks,before);
+    await click('[data-append]');const enable=node('[data-open-saved-workbook]');enable.checked=true;
+    enable.dispatchEvent(new window.Event('change',{bubbles:true}));await flush();await click('[data-commit]');
+    assert.equal(openedWorkbooks,before+1);
+  });
+  await check('Preference failures roll back the checkbox and file-open failures do not repeat a successful save',async()=>{
+    const originalLanguage=state.settings.language;
+    state.settings.language='hu';await click('[data-refresh]');
+    await click('[data-append]');failOpenPreference=true;
+    const toggle=node('[data-open-saved-workbook]');toggle.checked=false;
+    toggle.dispatchEvent(new window.Event('change',{bubbles:true}));await flush();
+    assert.equal(toggle.checked,true);assert.equal(state.settings.openSavedWorkbook,true);failOpenPreference=false;
+    failOpen=true;const before=writes;await click('[data-commit]');
+    assert.equal(writes,before+1);assert.equal(document.querySelector('[data-commit]'),null);
+    assert.match(node('[data-error]').textContent,/A fájl mentése sikerült/);
+    assert.match(node('[data-toast]').textContent,/Mentés kész/);failOpen=false;
+    await click('[data-append]');failCommit=true;const openedBefore=openedWorkbooks;
+    await click('[data-commit]');assert.equal(writes,before+1);assert.equal(openedWorkbooks,openedBefore);
+    failCommit=false;await click('[data-close-plan]');
+    state.settings.language='en';await click('[data-refresh]');await click('[data-append]');
+    assert.match(node('.cu-save-actions').textContent,/Open saved workbook/);
+    assert.equal(node('[data-version]').getAttribute('title'),'Application version');
+    state.settings.language=originalLanguage;await click('[data-close-plan]');await click('[data-refresh]');
+  });
   await check('Refresh preserves expanded days and the current scroll position',async()=>{window.scrollY=150;await click('[data-refresh]');assert.equal(window.scrollY,150);assert.equal(node('[data-expand]').getAttribute('aria-expanded'),'true');});
   await check('Localization never rewrites clipboard attributes or user-entered paths',()=>{const div=document.createElement('div');div.innerHTML='<input value="C:\\Munkaidőnapló\\x.xlsx"><button data-copy="Dátum">Dátum</button>';window.i18n.apply(div,'en');assert.equal(div.querySelector('button').textContent,'Date');assert.equal(div.querySelector('button').getAttribute('data-copy'),'Dátum');assert.equal(div.querySelector('input').getAttribute('value'),'C:\\Munkaidőnapló\\x.xlsx');});
   await check('Daily meeting is off by default and its dedicated tab saves the exact defaults and enabled state',async()=>{
@@ -260,6 +295,17 @@ const {parseHTML} = require('linkedom');
     assert.match(document.body.textContent,/its time is estimated/);
     state.settings.language='hu';await click('[data-refresh]');
     assert.match(document.body.textContent,/Váratlan leállás \(becsült\)/);
+  });
+  await check('Verified desktop observations have their own localized label and exact clipboard time',async()=>{
+    const original=clone(state.days[0]);const day=state.days[0];
+    day.firstSystem='Feloldott állapot észlelve';day.first=time('9:01','09:01:52');
+    day.events=[{time:time('9:01','09:01:52'),eventId:90003,label:'Feloldott állapot észlelve',isLock:false}];
+    state.settings.language='en';await click('[data-refresh]');
+    assert.match(document.body.textContent,/Unlocked session observed/);
+    await click('[data-copy="09:01:52"]');assert.equal(clipboard,'09:01:52');
+    state.settings.language='hu';await click('[data-refresh]');
+    assert.match(document.body.textContent,/Feloldott állapot észlelve/);
+    state.days[0]=original;await click('[data-refresh]');
   });
   await check('Break prompts default on in their own tab and the pairs table edits the reason, including free text',async()=>{
     await click('[data-settings]');await click('[data-tab="breaks"]');

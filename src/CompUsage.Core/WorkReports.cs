@@ -49,7 +49,8 @@ public static class WorkReports
         IReadOnlyDictionary<string, string>? meetings = null,
         IReadOnlyDictionary<string, string>? comments = null,
         IEnumerable<BreakNote>? breaks = null, IReadOnlyDictionary<string, string>? reasons = null,
-        IEnumerable<IdleBreak>? idles = null, IEnumerable<ActivityHeartbeat>? heartbeats = null)
+        IEnumerable<IdleBreak>? idles = null, IEnumerable<ActivityHeartbeat>? heartbeats = null,
+        IEnumerable<ActivityOpen>? opens = null)
     {
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
@@ -58,17 +59,19 @@ public static class WorkReports
         var notes = comments ?? new Dictionary<string, string>();
         var breakNotes = (breaks ?? []).ToArray();
         var reasonChoices = reasons ?? new Dictionary<string, string>();
+        var activityRecords = ActivityHistory.CoalesceLocks((activity ?? []).Where(r => r.LockedAt <= now));
         var raw = ActivityHistory.Recover(SessionEvents.ResolveSessions(SessionEvents.MergeSleeps(SessionEvents.MergeRecords(events.Where(e => e.Timestamp <= now && e.IsWorkTransition)))
             .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)),
-            (activity ?? []).Where(r => r.LockedAt <= now), breakNotes.Where(n => n.UnlockedAt <= now), (idles ?? []).Where(i => i.From <= now));
+            activityRecords, breakNotes.Where(n => n.UnlockedAt <= now), (idles ?? []).Where(i => i.From <= now));
         raw = ActivityHistory.RefineShutdowns(raw, heartbeats ?? [], now);
+        raw = ActivityHistory.RecoverOpenStates(raw, opens ?? [], now);
         var transitions = SessionEvents.WorkTransitions(raw);
         // Every user record stays visible; machine-wide sleeps and shutdowns only when they affected the user's session.
         var originalDays = raw.Where(e => !e.IsSystemEvent).Concat(transitions.Where(e => e.IsSystemEvent))
             .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
         // An RDP idle break across the day start can open a day that has no Windows event of its own.
-        return ActivityHistory.Idle(ActivityHistory.Apply(transitions, activity ?? [], settings, zone), idles ?? [], settings, now)
+        return ActivityHistory.Idle(ActivityHistory.Apply(transitions, activityRecords, settings, zone), idles ?? [], settings, now)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
             .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
             .Select(g => BuildDay(g.Key, g.ToArray(), originalDays.GetValueOrDefault(g.Key, []), settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices))

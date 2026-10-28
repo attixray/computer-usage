@@ -27,12 +27,15 @@ internal static class Program
             Check("Legacy settings keep daily meetings disabled and manual meeting choices survive a JSON round trip", () =>
             {
                 var legacy=System.Text.Json.JsonSerializer.Deserialize<LocalState>("{\"Settings\":{\"ExpectedLunch\":\"11:30:00\"}}")!;
+                Require(legacy.Settings.OpenSavedWorkbook);
+                legacy.Settings=legacy.Settings with {OpenSavedWorkbook=false};
                 Require(!legacy.Settings.IgnoreDailyMeeting && legacy.Meetings.Count==0);
                 Require(legacy.Settings.MeetingStartFrom==new TimeOnly(9,25) && legacy.Settings.MeetingStartUntil==new TimeOnly(9,40));
                 Require(legacy.Settings.MaximumMeetingMinutes==20);
                 legacy.Settings=legacy.Settings with {IgnoreDailyMeeting=true};legacy.Meetings["2026-10-16"]="example-pair";
                 var loaded=System.Text.Json.JsonSerializer.Deserialize<LocalState>(System.Text.Json.JsonSerializer.Serialize(legacy))!;
                 Require(loaded.Settings.IgnoreDailyMeeting && loaded.Meetings["2026-10-16"]=="example-pair");
+                Require(!loaded.Settings.OpenSavedWorkbook);
                 loaded.Settings=loaded.Settings with {IgnoreDailyMeeting=false};
                 Require(loaded.Meetings["2026-10-16"]=="example-pair");
                 Require(legacy.SectionComments.Count==0);

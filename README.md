@@ -28,6 +28,8 @@ A local Windows work-log application based on the current user's lock and unlock
 - Daily goal (8:00 by default): the tray icon's tooltip shows today's worked and remaining time, and a Windows notification appears once a day when the goal is reached.
 - A Summary page with weekly and monthly totals, the goal balance and a breakdown by break reason, with a configurable first day of the week.
 - `.xlsx` Details preview, append, optional completion of an unfinished row, backup, and detection of changes after preview.
+- The app header and the first row of each tray menu show the running process's application version.
+- A checked-by-default "Open saved workbook" option next to the Details save button opens the saved file with its associated application. The choice is saved immediately, even if the preview is cancelled. A launch failure is reported separately from a successful workbook save.
 
 ## Install and run
 
@@ -104,6 +106,10 @@ The Summary page beside the Log page shows the 60-day history by week and by cal
 The Security log is circular: on a busy computer it can overwrite a whole night's records within a day. While it runs, the background monitor copies the lock, sign-in, session and System power events it can read into `%LOCALAPPDATA%\CompUsage\Activity\events-<session>.json` every minute (locked or not, kept for 61 days), and the app and the daily goal merge them with the live log. Enlarging the Security log (an administrator setting) keeps more history as well.
 
 ## Optional activity tracking
+
+The background monitor verifies whether Windows reports an active, unlocked desktop after connection or lock notifications, and while polling. It persists the first confirmed open state with the numeric session and logon ID. If a Security unlock is missing (for example during an RDP-to-console handoff), this observation can reopen the matching closed session at its observed time. It is labelled "Unlocked session observed" rather than presented as a Windows unlock event. Nearby native unlocks retain their original timestamps and pair IDs. Sign-outs, reboots, foreign logons and old history without an observation are not repaired by guessing.
+
+Repeated lock notifications in the same closed period save only one activity sample. Existing journals are also supported: duplicate samples within an anchored 100 ms window are coalesced when their input data, protocol and logon agree, retaining a populated sample over an empty copy. Conflicting or more widely separated samples remain ambiguous. Open-state observations and lock samples are retained for 61 days and feed the UI, Excel calculation and background daily goal.
 
 The unelevated `--activity-monitor` process samples the current Windows session's `GetLastInputInfo` about once per second while unlocked. On a Windows session-lock notification it saves the latest sample. It never captures keys, text, application names or screenshots, and never starts the elevated event-log helper. The main window shows collector health and automatic-start registration in Time rules; lock details show the last observed input and idle duration. A stopped collector can be restarted from the status row.
 
