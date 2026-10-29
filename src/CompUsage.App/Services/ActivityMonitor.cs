@@ -483,7 +483,7 @@ public static class ActivityMonitor
 
         // Today's events come from the log and from the journal, which still has the ones the log already overwrote.
         private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
-            WorkReports.Build(events.Concat(journal.Events()), shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
+            WorkReports.Build(events.Concat(journal.Events()).Concat(shared.Corrections ?? []), shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
                 shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow), journal.Heartbeats(),
                 journal.ReadAll().SelectMany(s => s.Opens).Concat(state.Opens))
             .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));

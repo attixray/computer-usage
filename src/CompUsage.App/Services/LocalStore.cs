@@ -26,7 +26,8 @@ public sealed class LocalState
 }
 
 public sealed record SharedState(AppSettings Settings, IReadOnlyDictionary<string, string> Lunches,
-    IReadOnlyDictionary<string, string> Meetings, IReadOnlyDictionary<string, string> BreakReasons, IReadOnlyList<LoggingGap>? Gaps = null);
+    IReadOnlyDictionary<string, string> Meetings, IReadOnlyDictionary<string, string> BreakReasons, IReadOnlyList<LoggingGap>? Gaps = null,
+    IReadOnlyList<LockEvent>? Corrections = null);
 
 public sealed class LocalStore
 {
@@ -65,7 +66,7 @@ public sealed class LocalStore
             settings.Validate();
             return new(settings, Part<Dictionary<string, string>>(nameof(LocalState.Lunches)),
                 Part<Dictionary<string, string>>(nameof(LocalState.Meetings)), Part<Dictionary<string, string>>(nameof(LocalState.BreakReasons)),
-                Part<List<LoggingGap>>(nameof(LocalState.Gaps)));
+                Part<List<LoggingGap>>(nameof(LocalState.Gaps)), Part<List<LockEvent>>(nameof(LocalState.Events)).Where(e => e.IsManual).ToArray());
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {

@@ -49,10 +49,13 @@ internal static class Program
                 try
                 {
                     var saved=new LocalState();var from=new DateTimeOffset(2026,10,19,10,0,0,TimeSpan.FromHours(2));
+                    var manual=new CompUsage.Core.LockEvent(-1,from,CompUsage.Core.LockEvent.ManualUnlock,"sid","name","domain","1","0x1");
+                    saved.Events.AddRange([manual,manual with {RecordId=2,EventId=4800}]);
                     saved.Gaps.Add(new(from,from.AddHours(1)));saved.Gaps.Add(new(from.AddHours(3),null));
                     File.WriteAllText(file,System.Text.Json.JsonSerializer.Serialize(saved));
                     var shared=LocalStore.ReadShared(file);
                     Require(shared.Gaps is [var closed,var open] && closed.From==from && closed.To==from.AddHours(1) && open.To is null);
+                    Require(shared.Corrections is [var correction] && correction==manual);
                     Require(LocalStore.ReadShared(file+".missing").Gaps is null or { Count: 0 });
                 }
                 finally { File.Delete(file); }

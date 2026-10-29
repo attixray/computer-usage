@@ -30,7 +30,7 @@ const {parseHTML} = require('linkedom');
       const pair=message.data.value===null?day.pairs[0]:day.pairs.find(p=>p.id===message.data.value);
       day.meeting=pair?{id:pair.id,from:clone(pair.from),to:clone(pair.to),minutes:pair.minutes}:null;
       if(day.meeting?.id===day.lunch?.id){day.lunch=null;day.manual=false;}day.undo=true;result=clone(state);break;
-    }case 'undo':if(meetingUndo){state.days[0]=meetingUndo;meetingUndo=null;}state.days[0].manual=false;state.days[0].undo=false;result=clone(state);break;case 'breakReason':{const pair=state.days.flatMap(d=>d.pairs).find(p=>p.id===message.data.pairId);if(!pair)throw Error('Nincs ilyen szünetpár.');const day=state.days.find(d=>d.pairs.includes(pair));pair.reason=message.data.reason==='none'?null:message.data.reason;pair.reasonText=message.data.text||'';pair.reasonManual=message.data.reason!==null;day.manual=false;day.manualMeeting=false;day.noMeeting=false;day.undo=false;const slot=p=>p&&{id:p.id,from:clone(p.from),to:clone(p.to),minutes:p.minutes};if(pair.reason==='lunch')day.lunch=slot(pair);else if(day.lunch?.id===pair.id)day.lunch=null;if(state.settings.ignoreDailyMeeting){if(pair.reason==='standup')day.meeting=slot(pair);else if(day.meeting?.id===pair.id)day.meeting=null;}result=clone(state);break;}case 'previewTheme':break;case 'grantReadAccess':state.permissions.readAccessRequired=false;state.logging=true;result=clone(state);break;case 'view':break;default:throw Error(message.command);}queueMicrotask(()=>receive({data:{id:message.id,ok:true,result}}));}catch(error){queueMicrotask(()=>receive({data:{id:message.id,ok:false,error:error.message}}));}}}};
+    }case 'removeManualEvent':{const day=state.days.find(d=>d.events.some(e=>e.correctionId===message.data.id));if(!day)throw Error('Missing correction');day.events=day.events.filter(e=>e.correctionId!==message.data.id);day.hasCorrections=day.events.some(e=>e.correctionId);result=clone(state);break;}case 'undo':if(meetingUndo){state.days[0]=meetingUndo;meetingUndo=null;}state.days[0].manual=false;state.days[0].undo=false;result=clone(state);break;case 'breakReason':{const pair=state.days.flatMap(d=>d.pairs).find(p=>p.id===message.data.pairId);if(!pair)throw Error('Nincs ilyen szünetpár.');const day=state.days.find(d=>d.pairs.includes(pair));pair.reason=message.data.reason==='none'?null:message.data.reason;pair.reasonText=message.data.text||'';pair.reasonManual=message.data.reason!==null;day.manual=false;day.manualMeeting=false;day.noMeeting=false;day.undo=false;const slot=p=>p&&{id:p.id,from:clone(p.from),to:clone(p.to),minutes:p.minutes};if(pair.reason==='lunch')day.lunch=slot(pair);else if(day.lunch?.id===pair.id)day.lunch=null;if(state.settings.ignoreDailyMeeting){if(pair.reason==='standup')day.meeting=slot(pair);else if(day.meeting?.id===pair.id)day.meeting=null;}result=clone(state);break;}case 'previewTheme':break;case 'grantReadAccess':state.permissions.readAccessRequired=false;state.logging=true;result=clone(state);break;case 'view':break;default:throw Error(message.command);}queueMicrotask(()=>receive({data:{id:message.id,ok:true,result}}));}catch(error){queueMicrotask(()=>receive({data:{id:message.id,ok:false,error:error.message}}));}}}};
   window.scrollY=0;window.scrollTo=(_x,y)=>{window.scrollY=y;};window.getSelection=()=>({toString:()=>''});
   const context={window,document,NodeFilter:{SHOW_TEXT:4},Event:window.Event,console,setTimeout:()=>0,clearTimeout(){},Map,Set};
   vm.runInNewContext(fs.readFileSync('src/CompUsage.App/Ui/i18n.js','utf8'),context);
@@ -306,6 +306,19 @@ const {parseHTML} = require('linkedom');
     state.settings.language='hu';await click('[data-refresh]');
     assert.match(document.body.textContent,/Feloldott állapot észlelve/);
     state.days[0]=original;await click('[data-refresh]');
+  });
+  await check('Manual estimates are labelled and only the correction has an undo action',async()=>{
+    const original=clone(state.days[0]),language=state.settings.language,day=state.days[0];
+    day.hasCorrections=true;
+    day.events=[{time:time('9:02','09:02:00'),eventId:90004,label:'Kézi feloldás (becsült)',isLock:false,correctionId:'-123'},
+      {time:time('9:30','09:30:29'),eventId:4800,label:'Zárolás',isLock:true}];
+    state.settings.language='en';await click('[data-refresh]');
+    assert.match(document.body.textContent,/Includes manual correction/);assert.match(document.body.textContent,/Manual unlock \(estimated\)/);
+    assert.equal(document.querySelectorAll('[data-remove-correction]').length,1);
+    await click('[data-remove-correction]');
+    assert.equal(calls.findLast(c=>c.command==='removeManualEvent').data.id,'-123');
+    assert.equal(document.querySelector('[data-remove-correction]'),null);
+    state.days[0]=original;state.settings.language=language;await click('[data-refresh]');
   });
   await check('Break prompts default on in their own tab and the pairs table edits the reason, including free text',async()=>{
     await click('[data-settings]');await click('[data-tab="breaks"]');

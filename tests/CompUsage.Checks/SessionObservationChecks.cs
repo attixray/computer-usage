@@ -15,6 +15,16 @@ internal static class SessionObservationChecks
 
     public static void Run(Action<string, Action> check)
     {
+        check("A user-approved estimated unlock is explicit, exportable and reversible without changing native events", () =>
+        {
+            var original=Handoff();
+            var correction=original[3] with {RecordId=-At("09:02").UtcTicks, Timestamp=At("09:02"),EventId=LockEvent.ManualUnlock};
+            var fixedDay=Report(original.Append(correction),[]);
+            Require(!fixedDay.Incomplete && fixedDay.Sections.Count>0,"The approved correction did not repair the missing opening");
+            Require(correction.IsManual && correction.Label=="Kézi feloldás (becsült)","The estimate looked like a Windows event");
+            Require(original.All(e=>fixedDay.Events.Contains(e)),"The correction changed native evidence");
+            Require(Report(original,[]).Incomplete,"Removing the correction did not restore the original warning");
+        });
         check("An empty duplicate notification keeps the valid activity sample in either input order", () =>
         {
             var native = Event(1,"12:00",4800);

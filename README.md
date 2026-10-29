@@ -107,6 +107,8 @@ The Security log is circular: on a busy computer it can overwrite a whole night'
 
 ## Optional activity tracking
 
+User-approved estimated unlock corrections are kept separately identifiable from Windows events, labelled "Manual unlock (estimated)" and flagged on the day. They participate in the same work-section and export calculations as other openings. The raw event list offers an undo button for a manual correction only; removing it restores the original timeline and any incomplete-day warning. The background daily goal reads the same corrections as the main window.
+
 The background monitor verifies whether Windows reports an active, unlocked desktop after connection or lock notifications, and while polling. It persists the first confirmed open state with the numeric session and logon ID. If a Security unlock is missing (for example during an RDP-to-console handoff), this observation can reopen the matching closed session at its observed time. It is labelled "Unlocked session observed" rather than presented as a Windows unlock event. Nearby native unlocks retain their original timestamps and pair IDs. Sign-outs, reboots, foreign logons and old history without an observation are not repaired by guessing.
 
 Repeated lock notifications in the same closed period save only one activity sample. Existing journals are also supported: duplicate samples within an anchored 100 ms window are coalesced when their input data, protocol and logon agree, retaining a populated sample over an empty copy. Conflicting or more widely separated samples remain ambiguous. Open-state observations and lock samples are retained for 61 days and feed the UI, Excel calculation and background daily goal.
