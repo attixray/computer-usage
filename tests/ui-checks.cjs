@@ -10,9 +10,10 @@ const {parseHTML} = require('linkedom');
   let receive, clipboard = '', writes = 0, calls = [], meetingUndo=null, failComment=false, previewPartials=[];
   let openedWorkbooks=0, failOpen=false, failCommit=false, failOpenPreference=false;
   const time = (display, exact) => ({display,exact,date:'2026.10.16'});
-  let state = {settings:{dayStart:'04:00:00',expectedLunch:'11:30:00',minimumLunchMinutes:15,splitBreakMinutes:10,ignoreDailyMeeting:false,meetingStartFrom:'09:25:00',meetingStartUntil:'09:40:00',maximumMeetingMinutes:20,historyDays:60,workbookPath:'C:\\test\\work.xlsx',fontScale:1.15,rememberView:true,language:'hu',theme:'auto',lockTimeSource:'lock',remoteIdleMinutes:10},logging:true,permissions:{readAccessRequired:false},activity:{enabled:false,running:false,registered:true},user:'Test',expanded:[],scroll:0,refreshed:'2026.10.19 14:00:00',oldest:null,workbook:{available:true,lastDate:'2026.10.15',days:1,rows:2,partials:0},days:[{key:'2026-10-16',date:'2026.10.16',weekday:'péntek',status:'Lezárt',ongoing:false,incomplete:false,issues:[],first:time('8:02','08:02:14'),last:time('16:48','16:48:09'),manual:false,none:false,undo:false,lunch:{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19},pairs:[{id:'short',from:time('10:16','10:16:03'),to:time('10:20','10:20:09'),minutes:4},{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19}],sections:[{date:'2026.10.16',from:time('8:02','08:02:14'),to:time('11:32','11:32:05'),duration:'03:30',open:false,copy:'2026.10.16\t08:02:14\t11:32:05'},{date:'2026.10.16',from:time('11:51','11:51:34'),to:time('16:48','16:48:09'),duration:'04:57',open:false,copy:'2026.10.16\t11:51:34\t16:48:09'}],copy:'2026.10.16\t08:02:14\t11:32:05\r\n2026.10.16\t11:51:34\t16:48:09',eventCopy:'events',events:[]}]};
+  let state = {settings:{dayStart:'04:00:00',expectedLunch:'11:30:00',minimumLunchMinutes:15,splitBreakMinutes:10,minimumWorkMinutes:6,ignoreDailyMeeting:false,meetingStartFrom:'09:25:00',meetingStartUntil:'09:40:00',maximumMeetingMinutes:20,historyDays:60,workbookPath:'C:\\test\\work.xlsx',fontScale:1.15,rememberView:true,language:'hu',theme:'auto',lockTimeSource:'lock',remoteIdleMinutes:10},logging:true,permissions:{readAccessRequired:false},activity:{enabled:false,running:false,registered:true},user:'Test',expanded:[],scroll:0,refreshed:'2026.10.19 14:00:00',oldest:null,workbook:{available:true,lastDate:'2026.10.15',days:1,rows:2,partials:0},days:[{key:'2026-10-16',date:'2026.10.16',weekday:'péntek',status:'Lezárt',ongoing:false,incomplete:false,issues:[],first:time('8:02','08:02:14'),last:time('16:48','16:48:09'),manual:false,none:false,undo:false,lunch:{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19},pairs:[{id:'short',from:time('10:16','10:16:03'),to:time('10:20','10:20:09'),minutes:4},{id:'lunch',from:time('11:32','11:32:05'),to:time('11:51','11:51:34'),minutes:19}],sections:[{date:'2026.10.16',from:time('8:02','08:02:14'),to:time('11:32','11:32:05'),duration:'03:30',open:false,copy:'2026.10.16\t08:02:14\t11:32:05'},{date:'2026.10.16',from:time('11:51','11:51:34'),to:time('16:48','16:48:09'),duration:'04:57',open:false,copy:'2026.10.16\t11:51:34\t16:48:09'}],copy:'2026.10.16\t08:02:14\t11:32:05\r\n2026.10.16\t11:51:34\t16:48:09',eventCopy:'events',events:[]}]};
   const clone = value => JSON.parse(JSON.stringify(value));
   state.version='1.2.5';state.settings.openSavedWorkbook=true;
+  state.settings.promptForWorkDescription=false;state.settings.promptForBreakDescription=false;
   for(const day of state.days)day.sections.forEach((s,i)=>{s.id=day.key+'|'+i;s.comment='';s.durationExact=i?'4:56:35':'3:29:51';});
   function applyActivityReply(message) {
     state.activity.enabled=message.data.activityEnabled;
@@ -98,6 +99,28 @@ const {parseHTML} = require('linkedom');
     assert.doesNotMatch(node('[data-day] .cu-metrics').textContent,/Nincs aktivitási adat|No activity data/);
     assert.match(node('[data-day] .cu-metrics').textContent,/Windows-esemény alapján|From the Windows event/);
     state.settings.lockTimeSource='lock';await click('[data-refresh]');
+  });
+  await check('Minimum work has a numeric default, localizes, persists, cancels and rejects invalid input',async()=>{
+    await click('[data-settings]');
+    const selector='[data-setting="minimumWorkMinutes"]';
+    assert.equal(node(selector).value,'6');
+    assert.equal(node(selector).parentElement.parentElement,node('[data-setting="remoteIdleMinutes"]').parentElement.parentElement);
+    assert.match(node(selector).parentElement.textContent,/Minimum work to record/);
+    await input(selector,'9');await click('[data-cancel]');assert.equal(state.settings.minimumWorkMinutes,6);
+    await click('[data-settings]');await input(selector,'0');await click('[data-save]');
+    assert.equal(calls.findLast(c=>c.command==='settings').data.settings.minimumWorkMinutes,0);
+    await click('[data-settings]');assert.equal(node(selector).value,'0');
+    const saves=calls.filter(c=>c.command==='settings').length;
+    for(const invalid of ['-1','1.5','1441']){
+      await input(selector,invalid);await click('[data-save]');
+      assert.equal(calls.filter(c=>c.command==='settings').length,saves);
+      assert.match(node('[data-dialog-error]').textContent,/whole number of minutes/);
+    }
+    await input(selector,'6');await click('[data-save]');
+    const language=state.settings.language;state.settings.language='hu';await click('[data-refresh]');await click('[data-settings]');
+    assert.match(node(selector).parentElement.textContent,/Minimum feljegyzendő munka \(perc\)/);
+    assert.match(node('#panel-time').textContent,/0 = nincs szűrés/);
+    await click('[data-cancel]');state.settings.language=language;await click('[data-refresh]');
   });
   await check('Read access is configured only by its explicit settings action, preserving unknown audit state on ordinary saves',async()=>{
     state.permissions.readAccessRequired=true;state.logging=null;await click('[data-refresh]');
@@ -340,6 +363,29 @@ const {parseHTML} = require('linkedom');
     assert.match(document.body.textContent,/Kézi választás/);
     await click(`[data-break-reset="${pair.id}"]`);
     assert.equal(JSON.stringify(calls.findLast(c=>c.command==='breakReason').data),JSON.stringify({pairId:pair.id,reason:null}));
+  });
+  await check('Popup descriptions default off, save independently, cancel cleanly and have English labels',async()=>{
+    const toggle=(key,value)=>{const control=node(`[data-setting="${key}"]`);control.checked=value;control.dispatchEvent(new window.Event('input',{bubbles:true}));};
+    const open=async()=>{await click('[data-settings]');await click('[data-tab="breaks"]');};
+    await open();
+    assert.ok(!node('[data-setting="promptForWorkDescription"]').hasAttribute('checked'));
+    assert.ok(!node('[data-setting="promptForBreakDescription"]').hasAttribute('checked'));
+    assert.match(node('#panel-breaks').textContent,/Leírás kérése az „Egyéb munka” gombnál/);
+    toggle('promptForWorkDescription',true);await click('[data-save]');
+    let saved=calls.findLast(c=>c.command==='settings').data.settings;
+    assert.equal(saved.promptForWorkDescription,true);assert.equal(saved.promptForBreakDescription,false);
+    await open();assert.ok(node('[data-setting="promptForWorkDescription"]').hasAttribute('checked'));
+    toggle('promptForBreakDescription',true);await click('[data-cancel]');
+    assert.equal(state.settings.promptForBreakDescription,false);
+    await open();toggle('promptForWorkDescription',false);toggle('promptForBreakDescription',true);await click('[data-save]');
+    saved=calls.findLast(c=>c.command==='settings').data.settings;
+    assert.equal(saved.promptForWorkDescription,false);assert.equal(saved.promptForBreakDescription,true);
+    const language=state.settings.language;state.settings.language='en';await click('[data-refresh]');await open();
+    assert.match(node('#panel-breaks').textContent,/Ask for a description for Other work/);
+    assert.match(node('#panel-breaks').textContent,/Ask for a description for Other break/);
+    assert.match(node('#panel-breaks').textContent,/save immediately and close the popup/);
+    toggle('promptForBreakDescription',false);await click('[data-save]');
+    state.settings.language=language;await click('[data-refresh]');
   });
   await check('The monitor status counts break prompts as a reason to run',async()=>{
     state.activity={enabled:false,running:true,prompts:true,registered:true};await click('[data-refresh]');

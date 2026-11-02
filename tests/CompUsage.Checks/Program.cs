@@ -238,6 +238,7 @@ Check("Suspend coalescing does not hide distant locks, other sessions or interve
 SessionEventChecks.Run(Check);
 ShutdownChecks.Run(Check);
 SessionObservationChecks.Run(Check);
+MinimumWorkChecks.Run(Check);
 Check("An unexpected shutdown ends work at the last-alive time and the next sign-in continues the day", () =>
 {
     var day = Report([Event(16,"08:00",false), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown),
@@ -258,7 +259,7 @@ Check("Today's sign-in after boot starts work, while interleaved sessions still 
 Check("Activity tracking defaults off and validates its optional time source", () =>
 {
     True(!new ActivityConfiguration().Enabled);
-    Equal("lock", settings.LockTimeSource);
+    Equal("remote", settings.LockTimeSource);
     Throws<ArgumentException>(() => (settings with { LockTimeSource = "invalid" }).Validate());
 });
 
@@ -480,7 +481,7 @@ Check("RDP mode turns a long input gap without a lock into a break and moves a l
     Equal(At(16,"17:30"),day.Sections[1].To);Equal(1,day.Pairs.Count);Equal(LockEvent.IdleStart,day.Pairs[0].Lock.EventId);
     var again = WorkReports.Build(list,remote,lunches,now,zone,idles:idles).Single();Equal(day.Pairs[0].Id,again.Pairs[0].Id);
     // Other modes ignore the gaps, and a gap of another session or inside a break is skipped.
-    Equal(1,WorkReports.Build(list,settings,lunches,now,zone,idles:idles).Single().Sections.Count);
+    Equal(1,WorkReports.Build(list,settings with {LockTimeSource="lock"},lunches,now,zone,idles:idles).Single().Sections.Count);
     Equal(1,WorkReports.Build(list,remote,lunches,now,zone,idles:[new(At(16,"10:00"),At(16,"10:45"),"2")]).Single().Sections.Count);
     var withBreak = new[] {Event(16,"08:00",false),Event(16,"12:00",true),Event(16,"12:30",false),Event(16,"18:00",true)};
     Equal(2,WorkReports.Build(withBreak,remote,lunches,now,zone,idles:[new(At(16,"12:10"),At(16,"12:20"),"1")]).Single().Sections.Count);
@@ -655,6 +656,43 @@ var reports = WorkReports.Build(allEvents,settings,lunches,now,zone);
 Dictionary<string,byte[]> Entries(string path) { using var z=ZipFile.OpenRead(path);return z.Entries.ToDictionary(e=>e.FullName,e=>{using var s=e.Open();using var m=new MemoryStream();s.CopyTo(m);return m.ToArray();}); }
 try
 {
+    Check("Details append and copying use the same filtered sections without overwriting existing rows", () =>
+    {
+        var path = Fixture("minimum-work");
+        var events = new[] { Event(16,"08:00",false), Event(16,"08:05:59",true),
+            Event(16,"09:00",false), Event(16,"09:06",true), Event(16,"10:00",false), Event(16,"10:06:01",true) };
+        var days = WorkReports.Build(events, settings, lunches, now, zone);
+        var plan = service.Preview(path, days, settings.MinimumWorkMinutes);
+        Equal(2, plan.Rows.Count); True(plan.Rows.SequenceEqual(days.Single().Sections));
+        Equal("2026.10.16\t09:00:00\t09:06:00", Presentation.CopyRow(plan.Rows[0], zone));
+        service.Commit(plan, []);
+        using var book = new XLWorkbook(path);
+        var sheet = book.Worksheet("Details");
+        Equal("Existing description", sheet.Cell(2,6).GetString());
+        Equal(TimeSpan.FromHours(9), sheet.Cell(3,2).GetTimeSpan());
+        Equal(TimeSpan.FromHours(10) + TimeSpan.FromMinutes(6) + TimeSpan.FromSeconds(1), sheet.Cell(4,3).GetTimeSpan());
+        True(sheet.Cell(5,1).IsEmpty());
+    });
+    Check("Details waits for live work to reach the minimum, including continuation of the last workbook day", () =>
+    {
+        var path = Fixture("minimum-live-work");
+        var opened = Event(19,"08:00",false);
+        var shortDay = WorkReports.Build([opened], settings, lunches, At(19,"08:05:59"), zone);
+        var eligibleDay = WorkReports.Build([opened], settings, lunches, At(19,"08:06"), zone);
+        Equal(0, service.Preview(path, shortDay, 6).Rows.Count);
+        True(service.Preview(path, eligibleDay, 6).Rows.Single().Open);
+        True(service.Preview(path, shortDay, 0).Rows.Single().Open);
+        using (var book = new XLWorkbook(path))
+        {
+            var sheet = book.Worksheet("Details");
+            sheet.Cell(2,1).Value = new DateTime(2026,10,19);
+            sheet.Cell(2,2).Value = TimeSpan.FromHours(7);
+            sheet.Cell(2,3).Value = TimeSpan.FromHours(7.5);
+            book.Save();
+        }
+        Equal(0, service.Preview(path, shortDay, 6).Partials.Count);
+        True(service.Preview(path, eligibleDay, 6).Partials.Single().Interval.Open);
+    });
     Check("Activity journals are opt-in, retain independent sessions and prune old lock observations",()=>
     {
         var journal = new ActivityJournal(Path.Combine(fixtureRoot,"activity"));

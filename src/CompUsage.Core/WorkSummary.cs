@@ -48,7 +48,7 @@ public static class WorkSummary
             }
         }
         var worked = complete.Aggregate(TimeSpan.Zero, (total, d) => total + Worked(d));
-        return new(from, to, complete.Length, inRange.Length - complete.Length, worked,
+        return new(from, to, complete.Length, inRange.Count(d => d.Incomplete), worked,
             TimeSpan.FromMinutes(settings.DailyGoalMinutes) * complete.Length, reasons, unanswered, from < firstAvailable, today >= from && today <= to);
     }
 }

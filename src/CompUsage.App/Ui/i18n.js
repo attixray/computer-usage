@@ -2,6 +2,12 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Leírás kérése az „Egyéb munka” gombnál':'Ask for a description for Other work',
+    'Leírás kérése az „Egyéb szünet” gombnál':'Ask for a description for Other break',
+    'Alapból kikapcsolva: az Egyéb munka és Egyéb szünet gomb azonnal ment és bezárja a felugró ablakot. Bekapcsolva leírás adható meg vagy gyorsválasztás használható; Enter vagy Mentés zárja az ablakot.':'Off by default: Other work and Other break save immediately and close the popup. When enabled, enter a description and press Enter or Save, or use a quick choice.',
+    'Minimum feljegyzendő munka (perc)':'Minimum work to record (minutes)',
+    'A minimumnál rövidebb lezárt munkaszakaszok kimaradnak a listából, az összegből, a másolásból és az Excelből. A folyamatban lévő szakasz látszik, Excelbe a minimum elérésekor kerül. 0 = nincs szűrés.':'Closed work sections shorter than the minimum are excluded from the list, totals, copying and Excel. The current section stays visible and can be added to Excel once it reaches the minimum. 0 = no filter.',
+    'A minimum feljegyzendő munka 0 és 1440 közötti egész perc legyen.':'Minimum work to record must be a whole number of minutes between 0 and 1440.',
     'Alkalmazás verziója':'Application version',
     'Mentett XLS megnyitása':'Open saved workbook',
     'Az ebédet és a napi meetinget (standup) az Ok oszlopban lehet kiválasztani; a — kézi választás kizárja a párt a becslésből.':'Choose the lunch and the daily meeting (stand-up) in the Reason column; a manual — keeps the pair out of the estimate.',

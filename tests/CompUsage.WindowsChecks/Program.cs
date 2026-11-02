@@ -28,6 +28,10 @@ internal static class Program
             {
                 var legacy=System.Text.Json.JsonSerializer.Deserialize<LocalState>("{\"Settings\":{\"ExpectedLunch\":\"11:30:00\"}}")!;
                 Require(legacy.Settings.OpenSavedWorkbook);
+                Require(legacy.Settings.LockTimeSource == "remote" && legacy.Settings.MinimumWorkMinutes == 6);
+                Require(!legacy.Settings.PromptForWorkDescription && !legacy.Settings.PromptForBreakDescription);
+                legacy.Settings = legacy.Settings with { PromptForWorkDescription = true };
+                legacy.Settings = legacy.Settings with { LockTimeSource = "lock", MinimumWorkMinutes = 0 };
                 legacy.Settings=legacy.Settings with {OpenSavedWorkbook=false};
                 Require(!legacy.Settings.IgnoreDailyMeeting && legacy.Meetings.Count==0);
                 Require(legacy.Settings.MeetingStartFrom==new TimeOnly(9,25) && legacy.Settings.MeetingStartUntil==new TimeOnly(9,40));
@@ -36,6 +40,8 @@ internal static class Program
                 var loaded=System.Text.Json.JsonSerializer.Deserialize<LocalState>(System.Text.Json.JsonSerializer.Serialize(legacy))!;
                 Require(loaded.Settings.IgnoreDailyMeeting && loaded.Meetings["2026-10-16"]=="example-pair");
                 Require(!loaded.Settings.OpenSavedWorkbook);
+                Require(loaded.Settings.LockTimeSource == "lock" && loaded.Settings.MinimumWorkMinutes == 0);
+                Require(loaded.Settings.PromptForWorkDescription && !loaded.Settings.PromptForBreakDescription);
                 loaded.Settings=loaded.Settings with {IgnoreDailyMeeting=false};
                 Require(loaded.Meetings["2026-10-16"]=="example-pair");
                 Require(legacy.SectionComments.Count==0);
@@ -49,17 +55,21 @@ internal static class Program
                 try
                 {
                     var saved=new LocalState();var from=new DateTimeOffset(2026,10,19,10,0,0,TimeSpan.FromHours(2));
+                    saved.Settings = saved.Settings with { MinimumWorkMinutes = 9, PromptForBreakDescription = true };
                     var manual=new CompUsage.Core.LockEvent(-1,from,CompUsage.Core.LockEvent.ManualUnlock,"sid","name","domain","1","0x1");
                     saved.Events.AddRange([manual,manual with {RecordId=2,EventId=4800}]);
                     saved.Gaps.Add(new(from,from.AddHours(1)));saved.Gaps.Add(new(from.AddHours(3),null));
                     File.WriteAllText(file,System.Text.Json.JsonSerializer.Serialize(saved));
                     var shared=LocalStore.ReadShared(file);
+                    Require(shared.Settings.MinimumWorkMinutes == 9);
+                    Require(!shared.Settings.PromptForWorkDescription && shared.Settings.PromptForBreakDescription);
                     Require(shared.Gaps is [var closed,var open] && closed.From==from && closed.To==from.AddHours(1) && open.To is null);
                     Require(shared.Corrections is [var correction] && correction==manual);
                     Require(LocalStore.ReadShared(file+".missing").Gaps is null or { Count: 0 });
                 }
                 finally { File.Delete(file); }
             });
+            BreakPromptChecks.Run(Check);
             Check("A restart treats a monitor without a fresh heartbeat as stuck and never ends a foreign process", () =>
             {
                 var now=DateTimeOffset.UtcNow;

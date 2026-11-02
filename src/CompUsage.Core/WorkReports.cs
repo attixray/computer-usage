@@ -145,6 +145,10 @@ public static class WorkReports
                 from = gap.Unlock.Timestamp;
             }
             if (to > from) sections.Add(new(date, from, to, ongoing && !list[^1].IsLock));
+            // Apply the minimum after break merging and activity endpoints, using exact durations.
+            // Keep the live section provisional until it closes; raw events and pairs remain available.
+            var minimumWork = TimeSpan.FromMinutes(settings.MinimumWorkMinutes);
+            sections.RemoveAll(s => !s.Open && s.Duration < minimumWork);
         }
         return new(date, raw, pairs, first, last, lunch, manual, chosen == "none", ongoing, issues, sections)
         { Meeting = meeting, ManualMeeting = manualMeeting, NoMeeting = settings.IgnoreDailyMeeting && chosenMeeting == "none" };

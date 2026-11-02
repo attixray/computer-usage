@@ -4,7 +4,8 @@ using CompUsage.Core;
 internal static class SessionEventChecks
 {
     private static readonly TimeZoneInfo Zone = TimeZoneInfo.FindSystemTimeZoneById("Central Europe Standard Time");
-    private static readonly AppSettings Settings = new();
+    // These checks exercise event normalization, including genuine work lasting only seconds.
+    private static readonly AppSettings Settings = new() { MinimumWorkMinutes = 0 };
     private static DateTimeOffset At(string time) => WorkDayClock.At(new(2026, 10, 16), TimeOnly.Parse(time, CultureInfo.InvariantCulture), Zone);
     private static LockEvent User(long id, string time, int eventId) => new(id, At(time), eventId, "sid", "Test", "LOCAL", "1", "0x1");
     private static LockEvent[] Sleep(long id = 100, string from = "12:00", string to = "12:40") =>

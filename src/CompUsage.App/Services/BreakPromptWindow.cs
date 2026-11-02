@@ -15,6 +15,8 @@ public sealed class BreakPromptWindow : Window
     private readonly string suggestion;
     private readonly string? current;
     private readonly bool reopened;
+    private readonly AppSettings settings;
+    private readonly string currentText;
     private readonly Action<string, string, bool> save;
     private readonly bool english;
     private readonly TimeSpan total;
@@ -33,6 +35,7 @@ public sealed class BreakPromptWindow : Window
         bool reopened = false, string? currentReason = null, string currentText = "")
     {
         this.suggestion = suggestion; this.save = save; this.reopened = reopened; current = currentReason;
+        this.settings = settings; this.currentText = currentText;
         english = settings.Language == "en";
         total = remaining = TimeSpan.FromSeconds(settings.BreakPromptSeconds);
         using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
@@ -60,7 +63,7 @@ public sealed class BreakPromptWindow : Window
         foreach (var reason in BreakReasons.Codes)
         {
             content.Children.Add(Choice(reason));
-            if (BreakReasons.HasText(reason))
+            if (RequestsDescription(reason))
                 content.Children.Add(TextRow(reason, reason == BreakReasons.Work ? settings.WorkSuggestions : settings.BreakSuggestions,
                     reason == currentReason ? currentText : ""));
         }
@@ -79,7 +82,7 @@ public sealed class BreakPromptWindow : Window
             // The saved answer, or the suggestion when there is none, has the keyboard focus.
             var focus = current ?? suggestion;
             Activate();
-            if (BreakReasons.HasText(focus)) Open(focus); else buttons[focus].Focus();
+            if (RequestsDescription(focus)) Open(focus); else buttons[focus].Focus();
         };
         timer = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Normal, (_, _) => Tick(), Dispatcher);
         Closed += (_, _) => timer.Stop();
@@ -100,10 +103,16 @@ public sealed class BreakPromptWindow : Window
         row.Children.Add(right);
         row.Children.Add(new TextBlock { Text = ReasonName(reason), FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal });
         var button = Plain(null, null);
+        button.Name = "Reason_" + reason;
         button.Content = row; button.HorizontalContentAlignment = HorizontalAlignment.Stretch; button.Margin = new Thickness(0, 0, 0, 4);
         button.Padding = new Thickness(10, 6, 10, 6);
         if (selected) { button.Background = brand; button.Foreground = buttonInk; button.BorderBrush = brand; }
-        button.Click += (_, _) => { if (BreakReasons.HasText(reason)) Open(reason); else Finish(reason, "", false); };
+        button.Click += (_, _) =>
+        {
+            if (RequestsDescription(reason)) Open(reason);
+            // Reconfirming a saved answer with its editor disabled must not erase its existing description.
+            else Finish(reason, reason == current && BreakReasons.HasText(reason) ? currentText : "", false);
+        };
         buttons[reason] = button;
         return button;
     }
@@ -122,10 +131,11 @@ public sealed class BreakPromptWindow : Window
             chips.Children.Add(chip);
         }
         if (chips.Children.Count > 0) panel.Children.Add(chips);
-        var box = new TextBox { MaxLength = BreakReasons.MaximumText, Padding = new Thickness(6, 4, 6, 4), Text = text,
+        var box = new TextBox { Name = "Description_" + reason, MaxLength = BreakReasons.MaximumText, Padding = new Thickness(6, 4, 6, 4), Text = text,
             Background = paper, Foreground = ink, BorderBrush = line, CaretBrush = ink };
         box.KeyDown += (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; Finish(reason, box.Text, false); } };
         var saveText = Plain(english ? "Save" : "Mentés", null);
+        saveText.Name = "SaveDescription_" + reason;
         saveText.Background = brand; saveText.Foreground = buttonInk; saveText.BorderBrush = brand; saveText.Margin = new Thickness(6, 0, 0, 0);
         saveText.Click += (_, _) => Finish(reason, box.Text, false);
         var lineRow = new DockPanel();
@@ -145,7 +155,14 @@ public sealed class BreakPromptWindow : Window
         box.Focus(); box.CaretIndex = box.Text.Length;
     }
 
-    private string ReasonName(string reason) => Label(reason, english);
+    private bool RequestsDescription(string reason) => reason switch
+    {
+        BreakReasons.Work => settings.PromptForWorkDescription,
+        BreakReasons.Other => settings.PromptForBreakDescription,
+        _ => false
+    };
+
+    private string ReasonName(string reason) => RequestsDescription(reason) ? Label(reason, english) : Label(reason, english).TrimEnd('…');
 
     public static string Label(string reason, bool english) => reason switch
     {

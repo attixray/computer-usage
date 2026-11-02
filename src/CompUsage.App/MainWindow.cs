@@ -401,7 +401,7 @@ public sealed class MainWindow : Window
                 catch { state.Settings = previousSettings; throw; }
                 return state.Settings.OpenSavedWorkbook;
             case "preview":
-                activePlan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, Reports()));
+                activePlan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, Reports(), state.Settings.MinimumWorkMinutes));
                 planToken = Guid.NewGuid().ToString("N"); return PlanSnapshot(activePlan, planToken);
             case "commit":
                 if (activePlan is null || data.GetProperty("token").GetString() != planToken) throw new IOException("Az előnézet lejárt. Kérj új előnézetet.");
@@ -448,7 +448,7 @@ public sealed class MainWindow : Window
         try
         {
             var reports = Reports();
-            var plan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, reports));
+            var plan = await Task.Run(() => workbook.Preview(state.Settings.WorkbookPath, reports, state.Settings.MinimumWorkMinutes));
             display = new ExcelDisplay(plan.Formats, excelCulture, TimeZoneInfo.Local);
             workbookInfo = new { available = true, lastDate = plan.LastDate is { } date ? display.Date(date) : null,
                 days = plan.Rows.Select(r => r.Date).Distinct().Count(), rows = plan.Rows.Count, partials = plan.Partials.Count, error = (string?)null };

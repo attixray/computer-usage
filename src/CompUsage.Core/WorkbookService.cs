@@ -24,8 +24,12 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
     public static readonly TimeSpan PartialStartTolerance = TimeSpan.FromMinutes(3);
 
-    public WorkbookPlan Preview(string path, IReadOnlyList<WorkReport> days)
+    public WorkbookPlan Preview(string path, IReadOnlyList<WorkReport> days, int minimumWorkMinutes = 0)
     {
+        if (minimumWorkMinutes is < 0 or > 1440) throw new ArgumentOutOfRangeException(nameof(minimumWorkMinutes));
+        var minimumWork = TimeSpan.FromMinutes(minimumWorkMinutes);
+        // Do not start an Excel row for a provisional section that may be filtered when it closes.
+        bool Recordable(WorkInterval section) => section.Duration >= minimumWork;
         ValidatePath(path);
         var bytes = File.ReadAllBytes(path);
         using var buffer = new MemoryStream(bytes);
@@ -41,11 +45,11 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         var formats = ReadFormats(sheet, ReadXml(zip, "xl/styles.xml"), lastRow);
         // Today's ongoing day is included too; its open section is written without an end (see Commit).
         var rows = days.Where(d => !d.Incomplete && (lastDate is null || d.Date > lastDate))
-            .OrderBy(d => d.Date).SelectMany(d => d.Sections).ToArray();
+            .OrderBy(d => d.Date).SelectMany(d => d.Sections).Where(Recordable).ToArray();
         var partials = new List<PartialRow>();
         foreach (var (row, date) in dated.Where(r => r.Date == lastDate))
         {
-            var sections = days.Where(d => d.Date == date && !d.Incomplete).SelectMany(d => d.Sections).OrderBy(s => s.From).ToArray();
+            var sections = days.Where(d => d.Date == date && !d.Incomplete).SelectMany(d => d.Sections).Where(Recordable).OrderBy(s => s.From).ToArray();
             var from = ReadTime(Cell(row, "B"), strings);
             if (!string.IsNullOrWhiteSpace(Text(Cell(row, "C"), strings)))
             {
