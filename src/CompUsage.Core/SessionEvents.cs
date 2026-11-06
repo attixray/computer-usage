@@ -65,10 +65,19 @@ public static class SessionEvents
         var list = events.OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId).ToArray();
         var result = new List<LockEvent>();
         var closed = new Dictionary<string, bool>();
+        var disconnected = new HashSet<string>();
         var sleeps = new Dictionary<string, SleepState>();
         for (var i = 0; i < list.Length; i++)
         {
             var entry = list[i];
+            // A connection changes transport, not the lock state. Only an unlock, sign-in or a
+            // verified open-desktop observation may start work, regardless of connection delay.
+            if (entry.EventId == 4778) { disconnected.Remove(entry.SessionKey); continue; }
+            if (entry.EventId == 4779) disconnected.Add(entry.SessionKey);
+            // A delayed lock on a disconnected desktop cannot close work a second time.
+            if (entry.EventId == 4800 && disconnected.Contains(entry.SessionKey)
+                && result.LastOrDefault(e => e.SessionKey == entry.SessionKey)?.EventId == 4779) continue;
+            if (entry.EventId is 4801 or 4624 or LockEvent.ObservedUnlock or LockEvent.ManualUnlock) disconnected.Remove(entry.SessionKey);
             var previous = result.Count > 0 ? result[^1] : null;
             if (entry.IsSystemEvent)
             {
@@ -109,8 +118,8 @@ public static class SessionEvents
             var duplicate = false;
             if (Rank(entry) > 0 && HasLogon(entry))
             {
-                // Prefer a real lock/unlock within five seconds, preserving its exact timestamp and lunch-pair ID;
-                // a connection record likewise wins over a sign-in or sign-out record.
+                // Prefer a native transition within five seconds of a disconnect or sign-in/out,
+                // preserving its exact timestamp and lunch-pair ID. Reconnects provide context only.
                 // Never coalesce through an opposite transition or across accounts/logon sessions.
                 foreach (var direction in new[] { -1, 1 })
                 {
@@ -119,6 +128,7 @@ public static class SessionEvents
                         var other = list[j];
                         if (Math.Abs((other.Timestamp - entry.Timestamp).TotalSeconds) > 5) break;
                         if (other.SessionKey != entry.SessionKey) continue;
+                        if (other.EventId == 4778) continue;
                         if (other.IsLock != entry.IsLock) break;
                         if (Rank(other) < Rank(entry)) { duplicate = true; break; }
                     }
@@ -130,7 +140,7 @@ public static class SessionEvents
             {
                 if (!entry.IsLock)
                 {
-                    // The real unlock/reconnect wins over an inferred wake and ends duplicate suppression.
+                    // A real or verified unlock wins over an inferred wake and ends duplicate suppression.
                     if (sleep.ProvisionalWake is { } wake) result.Remove(wake);
                     sleeps.Remove(entry.SessionKey);
                 }
@@ -160,10 +170,51 @@ public static class SessionEvents
             }
             // Disconnecting, signing out or shutting down an already locked or disconnected session does not end work again.
             if (entry.EventId is 4647 or 4779 && closed.GetValueOrDefault(entry.SessionKey)) continue;
+            // Once the monitor has proved the desktop open, a delayed native unlock confirms it;
+            // it must not start a second interval. The raw native record remains visible.
+            if (entry.EventId == 4801 && !closed.GetValueOrDefault(entry.SessionKey)
+                && result.LastOrDefault(e => e.SessionKey == entry.SessionKey)?.EventId == LockEvent.ObservedUnlock) continue;
             result.Add(entry);
             closed[entry.SessionKey] = entry.IsLock;
         }
         return result;
+    }
+
+    // Preserve uncertainty when connection records are all that is left in old history. A connection
+    // episode with no confirmed opening must not silently disappear or be exported as measured work.
+    public static IReadOnlyList<LockEvent> UnverifiedConnections(IEnumerable<LockEvent> events)
+    {
+        var pending = new Dictionary<string, LockEvent>();
+        var working = new HashSet<string>();
+        var unknown = new List<LockEvent>();
+        void End(string key)
+        {
+            if (pending.Remove(key, out var connection)) unknown.Add(connection);
+            working.Remove(key);
+        }
+        foreach (var entry in events.OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId))
+        {
+            if (entry.IsSystemEvent)
+            {
+                if (entry.EventId is LockEvent.SystemShutdown or LockEvent.UnexpectedShutdown)
+                    foreach (var ended in pending.Keys.Concat(working).Distinct().ToArray()) End(ended);
+                else if (entry.EventId == LockEvent.Sleep) working.Clear();
+                continue;
+            }
+            var key = entry.SessionKey;
+            if (entry.EventId == 4778)
+            {
+                if (!working.Contains(key)) pending.TryAdd(key, entry);
+            }
+            else if (entry.EventId is 4779 or 4647) End(key);
+            else if (entry.EventId == 4800) working.Remove(key);
+            else if (entry.EventId is 4801 or 4624 or LockEvent.ObservedUnlock or LockEvent.ManualUnlock)
+            {
+                working.Add(key); pending.Remove(key);
+            }
+        }
+        unknown.AddRange(pending.Values);
+        return unknown;
     }
 
     private sealed class SleepState(LockEvent sleep, LockEvent? wake, bool requiresUnlock)

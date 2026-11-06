@@ -121,7 +121,7 @@
   function dayDetails(day) {
     const meetingEnabled=state.settings.ignoreDailyMeeting;
     return `<section class="cu-detail"><details class="cu-pair-details" data-pair-details="${day.key}" ${pairDetails.has(day.key)?'open':''}><summary>Lock / unlock párok (${day.pairs.length})</summary>
-      ${day.hasSessionEvents?`<p class="cu-sub">A kapcsolódás munkakezdésnek, a leválasztás szünetkezdetnek számít. Az egyidejű lock/unlock csak egyszer számít.</p>`:''}
+      ${day.hasSessionEvents?`<p class="cu-sub">A leválasztás szünetet kezd; a munka feloldáskor vagy igazolt feloldott állapotnál folytatódik. A csatlakozás önmagában nem munkakezdés.</p>`:''}
       ${day.hasSignInEvents?`<p class="cu-sub">A bejelentkezés munkakezdésnek, a kijelentkezés vagy leállítás szünetkezdetnek számít. Újraindítás után az új munkamenet ugyanazt a napot folytatja.</p>`:''}
       ${day.hasSystemEvents?`<p class="cu-sub">Az alvás, a leállítás és a váratlan leállás a Windows System naplójából származik, és csak nyitott munkamenetben számít. A váratlan leállás időpontja a rendszer utolsó életjele, ezért becsült.</p>`:''}
       <datalist id="cu-other-suggestions">${(state.settings.breakSuggestions||[]).map(x=>`<option value="${esc(x)}">`).join('')}</datalist><datalist id="cu-work-suggestions">${(state.settings.workSuggestions||[]).map(x=>`<option value="${esc(x)}">`).join('')}</datalist>

@@ -245,21 +245,34 @@ const {parseHTML} = require('linkedom');
     assert.equal(calls.findLast(c=>c.command==='commentsPending').data.pending,false);assert.equal(state.days[0].sections[0].comment,'Unsaved note');
     await click('[data-append]');assert.ok(node('[data-import] thead'));await click('[data-close-plan]');
   });
-  await check('Session-only endpoints have accurate labels and localized raw events without changing exact copy data',async()=>{
-    const day=state.days[0];day.hasSessionEvents=true;day.firstFromSession=true;day.lastFromSession=true;day.lastFromActivity=false;
-    day.events=[{time:time('8:02','08:02:14'),eventId:4778,label:'Munkamenet csatlakoztatása',isLock:false},
+  await check('Connections stay visible in the raw log while the first metric uses the actual unlock',async()=>{
+    const day=state.days[0];day.hasSessionEvents=true;day.firstFromSession=false;day.lastFromSession=true;day.lastFromActivity=false;
+    day.events=[{time:time('8:02','08:02:07'),eventId:4778,label:'Munkamenet csatlakoztatása',isLock:false},
+      {time:time('8:02','08:02:14'),eventId:4801,label:'Feloldás',isLock:false},
       {time:time('16:48','16:48:09'),eventId:4779,label:'Munkamenet leválasztása',isLock:true}];
-    day.eventCopy='2026.10.16\t08:02:14\tMunkamenet csatlakoztatása\t4778';
+    day.eventCopy='2026.10.16\t08:02:07\tMunkamenet csatlakoztatása\t4778';
     await click('[data-refresh]');
-    assert.match(document.body.textContent,/First connection/);assert.match(document.body.textContent,/Last disconnect/);
+    assert.match(document.body.textContent,/First unlock/);assert.match(document.body.textContent,/Last disconnect/);
+    assert.doesNotMatch(node('.cu-metrics').textContent,/First connection/);
     assert.match(document.body.textContent,/Session connected/);assert.match(document.body.textContent,/Session disconnected/);
-    assert.match(document.body.textContent,/Concurrent lock\/unlock events count once/);
+    assert.match(document.body.textContent,/Connecting alone does not start work/);
     await click('[data-copy="08:02:14"]');assert.equal(clipboard,'08:02:14');
     const logButton=[...document.querySelectorAll('[data-copy]')].find(b=>b.getAttribute('data-copy')===day.eventCopy);
     assert.ok(logButton);logButton.dispatchEvent(new window.Event('click',{bubbles:true}));await flush();assert.equal(clipboard,day.eventCopy);
     state.settings.language='hu';await click('[data-refresh]');
-    assert.match(document.body.textContent,/Első kapcsolódás/);assert.match(document.body.textContent,/Utolsó leválasztás/);
+    assert.match(document.body.textContent,/Első feloldás/);assert.match(document.body.textContent,/Utolsó leválasztás/);
+    assert.match(document.body.textContent,/A csatlakozás önmagában nem munkakezdés/);
     assert.match(document.body.textContent,/Munkamenet csatlakoztatása/);
+  });
+  await check('A connection without a verified unlock has a localized warning and no copyable work',async()=>{
+    const original=clone(state.days[0]),language=state.settings.language;
+    Object.assign(state.days[0],{incomplete:true,issues:['A csatlakozás után nem található igazolt feloldás.'],first:null,sections:[],copy:''});
+    state.settings.language='hu';await click('[data-refresh]');
+    assert.match(node('[data-day]').textContent,/A csatlakozás után nem található igazolt feloldás/);
+    assert.equal(node('.cu-day-head>[data-copy]').disabled,true);
+    state.settings.language='en';await click('[data-refresh]');
+    assert.match(node('[data-day]').textContent,/No confirmed unlock was found after connecting/);
+    state.days[0]=original;state.settings.language=language;await click('[data-refresh]');
   });
   await check('Sign-in and shutdown endpoints have accurate localized labels',async()=>{
     const day=state.days[0];day.hasSessionEvents=false;day.hasSignInEvents=true;day.firstFromSession=false;day.lastFromSession=false;

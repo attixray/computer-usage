@@ -26,6 +26,7 @@ public sealed record LockEvent(
     public bool IsSessionTransition => EventId is 4778 or 4779;
     public bool IsSignInOrOut => EventId is 4624 or 4647;
     public bool IsSystemEvent => EventId is Sleep or Wake or UnexpectedShutdown or SystemShutdown;
+    // Includes connection context for caching and diagnostics; WorkTransitions decides what actually starts work.
     public bool IsWorkTransition => EventId is 4800 or 4801 or 4778 or 4779 or 4624 or 4647 or ObservedUnlock or ManualUnlock || IsSystemEvent;
     public string Label => EventId switch
     {

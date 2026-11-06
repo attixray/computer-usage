@@ -140,9 +140,12 @@ public static class ActivityHistory
             if (templates.Length != 1) continue;
             var template = templates[0];
             var previous = timeline.LastOrDefault(e => e.SessionKey == template.SessionKey && e.Timestamp <= open.ObservedAt);
-            if (previous is null || previous.EventId is not (4800 or 4779 or LockEvent.Sleep or LockEvent.Wake)) continue;
+            var connection = events.Where(e => e.EventId == 4778 && e.SessionKey == template.SessionKey && e.Timestamp <= open.ObservedAt)
+                .MaxBy(e => e.Timestamp);
+            if (previous is null ? connection is null : previous.EventId is not (4800 or 4779 or LockEvent.Sleep or LockEvent.Wake)) continue;
+            var boundary = previous?.Timestamp ?? connection!.Timestamp;
             // Observations cannot revive a signed-out session or bridge a reboot. A nearby real unlock wins.
-            if (events.Any(e => e.Timestamp > previous.Timestamp && e.Timestamp <= open.ObservedAt
+            if (events.Any(e => e.Timestamp > boundary && e.Timestamp <= open.ObservedAt
                 && (e.EventId is LockEvent.UnexpectedShutdown or LockEvent.SystemShutdown
                     || e.EventId == 4647 && e.SessionKey == template.SessionKey))) continue;
             var next = timeline.FirstOrDefault(e => e.SessionKey == template.SessionKey && e.Timestamp > open.ObservedAt);

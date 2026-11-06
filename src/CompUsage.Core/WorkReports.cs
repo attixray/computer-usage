@@ -71,22 +71,25 @@ public static class WorkReports
             .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
         // An RDP idle break across the day start can open a day that has no Windows event of its own.
-        return ActivityHistory.Idle(ActivityHistory.Apply(transitions, activityRecords, settings, zone), idles ?? [], settings, now)
-            .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone))
-            .Where(g => g.Key >= firstDate && g.Key <= today).OrderByDescending(g => g.Key)
-            .Select(g => BuildDay(g.Key, g.ToArray(), originalDays.GetValueOrDefault(g.Key, []), settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices))
+        var workDays = ActivityHistory.Idle(ActivityHistory.Apply(transitions, activityRecords, settings, zone), idles ?? [], settings, now)
+            .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
+        var unverified = SessionEvents.UnverifiedConnections(raw).Select(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToHashSet();
+        return workDays.Keys.Concat(originalDays.Keys).Distinct().Where(date => date >= firstDate && date <= today).OrderDescending()
+            .Select(date => BuildDay(date, workDays.GetValueOrDefault(date, []), originalDays.GetValueOrDefault(date, []), settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices, unverified.Contains(date)))
             .Select(day => day with { Sections = day.Sections.Select(s => s with { Comment = notes.GetValueOrDefault(s.Id, "") }).ToArray() }).ToArray();
     }
 
     private static WorkReport BuildDay(DateOnly date, LockEvent[] list, LockEvent[] raw, AppSettings settings,
         IReadOnlyDictionary<string, string> lunches, IReadOnlyDictionary<string, string> meetings,
         DateTimeOffset now, TimeZoneInfo zone, IEnumerable<LoggingGap> gaps,
-        IReadOnlyList<BreakNote> breaks, IReadOnlyDictionary<string, string> reasons)
+        IReadOnlyList<BreakNote> breaks, IReadOnlyDictionary<string, string> reasons, bool unverifiedConnection)
     {
         var ongoing = date == WorkDayClock.GetDate(now, settings.DayStart, zone);
         var issues = new List<string>();
-        if (list[0].IsLock) issues.Add("Hiányzik a nap kezdő feloldása.");
-        if (!ongoing && !list[^1].IsLock) issues.Add("Hiányzik a nap záró zárolása.");
+        if (unverifiedConnection || list.Length == 0 && raw.Any(e => e.EventId == 4778))
+            issues.Add("A csatlakozás után nem található igazolt feloldás.");
+        if (list.FirstOrDefault()?.IsLock == true) issues.Add("Hiányzik a nap kezdő feloldása.");
+        if (!ongoing && list.LastOrDefault()?.IsLock == false) issues.Add("Hiányzik a nap záró zárolása.");
         var sequential = SessionEvents.Sequential(list);
         if (!sequential)
             issues.Add("Több Windows-munkamenet: a munkaszakaszok kézi ellenőrzést igényelnek.");

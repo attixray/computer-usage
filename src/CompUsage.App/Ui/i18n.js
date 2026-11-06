@@ -2,6 +2,7 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'A csatlakozás után nem található igazolt feloldás.':'No confirmed unlock was found after connecting.',
     'Leírás kérése az „Egyéb munka” gombnál':'Ask for a description for Other work',
     'Leírás kérése az „Egyéb szünet” gombnál':'Ask for a description for Other break',
     'Alapból kikapcsolva: az Egyéb munka és Egyéb szünet gomb azonnal ment és bezárja a felugró ablakot. Bekapcsolva leírás adható meg vagy gyorsválasztás használható; Enter vagy Mentés zárja az ablakot.':'Off by default: Other work and Other break save immediately and close the popup. When enabled, enter a description and press Enter or Save, or use a quick choice.',
@@ -102,7 +103,7 @@ window.i18n = (() => {
     'Első kapcsolódás':'First connection','Első észlelt kapcsolódás':'First observed connection',
     'Utolsó leválasztás':'Last disconnect','Legutóbbi leválasztás':'Most recent disconnect',
     'Nincs aktivitási adat · leválasztás alapján':'No activity data · using disconnect time',
-    'A kapcsolódás munkakezdésnek, a leválasztás szünetkezdetnek számít. Az egyidejű lock/unlock csak egyszer számít.':'Connecting starts work; disconnecting starts a break. Concurrent lock/unlock events count once.',
+    'A leválasztás szünetet kezd; a munka feloldáskor vagy igazolt feloldott állapotnál folytatódik. A csatlakozás önmagában nem munkakezdés.':'Disconnecting starts a break; work resumes at an unlock or a verified unlocked desktop. Connecting alone does not start work.',
     'Nincs hozzáfűzhető lezárt nap a Details utolsó dátuma után. A folyamatban lévő nap a munkanap vége után kerülhet be.':'No closed day to append after the last Details date. The day in progress can be added after the workday ends.',
     'üresen marad (folyamatban)':'left blank (in progress)',
     'Utána új sorként:':'Then as new rows:',

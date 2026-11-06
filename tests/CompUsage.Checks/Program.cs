@@ -55,7 +55,7 @@ Check("Session events require the full current account, while lock events requir
     Equal(1, selected.Length); Equal("S-1-5-21-1", selected[0].UserSid);
     Equal(1, SessionEvents.ForUser([Event(16,"08:00",false)], "S-1-5-21-1", @"LOCAL\Test").Count());
 });
-Check("RDP morning, disconnect and console reconnect fill the missing unlock without double counting", () =>
+Check("RDP morning keeps native endpoints and a console handoff requires proof when its unlock is missing", () =>
 {
     var unlock = Event(19, "07:05:23", false);
     var locked = Event(19, "07:29:51", true);
@@ -63,12 +63,14 @@ Check("RDP morning, disconnect and console reconnect fill the missing unlock wit
         unlock, locked with {RecordId=id++,EventId=4779,Timestamp=At(19,"07:29:50"),SessionId=""}, locked,
         unlock with {RecordId=id++,EventId=4778,Timestamp=At(19,"08:13:51"),SessionId=""},
         Event(19,"09:29:43",true), Event(19,"09:41:18",false)];
-    var day = Report(entries.Concat(entries));
-    True(!day.Incomplete && day.Ongoing); Equal(7, day.Events.Count); Equal(unlock.RecordId, day.First!.RecordId);
-    Equal(2, day.Pairs.Count); Equal(4778, day.Pairs[0].Unlock.EventId);
-    Equal(locked.Timestamp, day.Pairs[0].Lock.Timestamp); Equal(At(19,"08:13:51"), day.Pairs[0].Unlock.Timestamp);
+    True(Report(entries).Incomplete);
+    var day = WorkReports.Build(entries.Concat(entries),settings,lunches,now,zone,
+        opens:[new(At(19,"08:13:53"),"1","0x1")]).Single();
+    True(!day.Incomplete && day.Ongoing); Equal(8, day.Events.Count); Equal(unlock.RecordId, day.First!.RecordId);
+    Equal(2, day.Pairs.Count); Equal(LockEvent.ObservedUnlock, day.Pairs[0].Unlock.EventId);
+    Equal(locked.Timestamp, day.Pairs[0].Lock.Timestamp); Equal(At(19,"08:13:53"), day.Pairs[0].Unlock.Timestamp);
     Equal(3, day.Sections.Count); Equal(unlock.Timestamp, day.Sections[0].From);
-    Equal(At(19,"08:13:51"), day.Sections[1].From); True(day.Sections[^1].Open);
+    Equal(At(19,"08:13:53"), day.Sections[1].From); True(day.Sections[^1].Open);
 });
 Check("Duplicate connection records preserve an existing manual lunch pair and original second precision", () =>
 {
@@ -80,15 +82,15 @@ Check("Duplicate connection records preserve an existing manual lunch pair and o
     Equal(Presentation.CopyRow(before.Sections[0],zone), Presentation.CopyRow(day.Sections[0],zone));
     lunches.Clear();
 });
-Check("Deduplication cannot skip a real intervening opposite transition or cross sessions", () =>
+Check("Connections do not start work or hide real locks and foreign sessions", () =>
 {
     var connected = Event(16,"08:00",false) with {EventId=4778};
     LockEvent[] entries = [connected, Event(16,"08:00:01",true), Event(16,"08:00:02",false),Event(16,"17:00",true)];
-    Equal(4, SessionEvents.WorkTransitions(entries).Count); True(!Report(entries).Incomplete);
+    Equal(3, SessionEvents.WorkTransitions(entries).Count); True(Report(entries).Incomplete);
     var other = Event(16,"08:00:01",false) with {SessionId="2"};
-    Equal(2, SessionEvents.WorkTransitions([connected,other]).Count);
-    Equal(2, SessionEvents.WorkTransitions([connected,other with {SessionId="1",LogonId="0x2"}]).Count);
-    Equal(2, SessionEvents.WorkTransitions([connected,other with {SessionId="1",UserSid="other"}]).Count);
+    Equal(1, SessionEvents.WorkTransitions([connected,other]).Count);
+    Equal(1, SessionEvents.WorkTransitions([connected,other with {SessionId="1",LogonId="0x2"}]).Count);
+    Equal(1, SessionEvents.WorkTransitions([connected,other with {SessionId="1",UserSid="other"}]).Count);
 });
 Check("Only unambiguous session IDs are recovered and unknown sessions stay marked for review", () =>
 {
@@ -99,14 +101,14 @@ Check("Only unambiguous session IDs are recovered and unknown sessions stay mark
     True(Report([connected with {LogonId="0x2"},native]).Incomplete);
     Equal("1", SessionEvents.ResolveSessions([connected with {LogonId="0X1"},native])[0].SessionId);
 });
-Check("A session-only day supports the existing break threshold without fabricated lock events", () =>
+Check("A session-only day stays visible for review without fabricating unlocked work", () =>
 {
     LockEvent[] entries = [Event(16,"08:00",false) with {EventId=4778,SessionId=""},
         Event(16,"10:00",true) with {EventId=4779,SessionId=""},
         Event(16,"10:10",false) with {EventId=4778,SessionId=""},Event(16,"17:00",true) with {EventId=4779,SessionId=""}];
-    var day = Report(entries); True(!day.Incomplete); Equal(1,day.Sections.Count); Equal(4778,day.First!.EventId);
+    var day = Report(entries); True(day.Incomplete); Equal(0,day.Sections.Count); True(day.First is null); Equal(4,day.Events.Count);
     Equal(4779,day.Last!.EventId); entries[2] = entries[2] with {Timestamp=entries[2].Timestamp.AddSeconds(1)};
-    Equal(2,Report(entries).Sections.Count);
+    Equal(0,Report(entries).Sections.Count);
 });
 LockEvent SignIn(int day, string time, string logon) => new(id++, At(day, time), 4624, "S-1-5-21-1", "Test", "LOCAL", "", logon);
 LockEvent SignOut(int day, string time, string logon) => new(id++, At(day, time), 4647, "S-1-5-21-1", "Test", "LOCAL", "", logon);
@@ -131,11 +133,11 @@ Check("Credential checks at unlock are not sign-ins; the session's own and the c
 });
 Check("A mid-day restart continues the day from the new sign-in and a shutdown closes it", () =>
 {
-    LockEvent[] entries = [Event(16,"08:24:09",false) with {EventId=4778,SessionId="",LogonId="0x2a1acf"},
+    LockEvent[] entries = [Event(16,"08:24:09",false) with {EventId=4801,SessionId="2",LogonId="0x2a1acf"},
         Event(16,"11:27:34",true,"2") with {LogonId="0x2a1acf"}, Event(16,"11:44:22",false,"2") with {LogonId="0x2a1acf"},
         SignOut(16,"14:46:16","0x2a1acf"), SignIn(16,"14:46:50","0xe1ca5"), SignOut(16,"17:33:07","0xe1ca5")];
     var day = Report(entries);
-    True(!day.Incomplete); Equal(4778, day.First!.EventId); Equal(4647, day.Last!.EventId); Equal(At(16,"17:33:07"), day.Last.Timestamp);
+    True(!day.Incomplete); Equal(4801, day.First!.EventId); Equal(4647, day.Last!.EventId); Equal(At(16,"17:33:07"), day.Last.Timestamp);
     Equal(2, day.Pairs.Count); Equal(4624, day.Pairs[1].Unlock.EventId); Equal(4647, day.Pairs[1].Lock.EventId);
     Equal(2, day.Sections.Count); Equal(At(16,"11:44:22"), day.Sections[1].From); Equal(At(16,"17:33:07"), day.Sections[1].To);
     entries[4] = entries[4] with { Timestamp = At(16,"14:56:17") };
@@ -239,6 +241,7 @@ SessionEventChecks.Run(Check);
 ShutdownChecks.Run(Check);
 SessionObservationChecks.Run(Check);
 MinimumWorkChecks.Run(Check);
+ConnectionStateChecks.Run(Check);
 Check("An unexpected shutdown ends work at the last-alive time and the next sign-in continues the day", () =>
 {
     var day = Report([Event(16,"08:00",false), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown),
@@ -368,7 +371,7 @@ Check("Meeting matching follows the selected activity endpoint and duration with
 });
 Check("Session disconnect pairs can be daily meetings, while incomplete days remain excluded", () =>
 {
-    var entries=MeetingDay();entries[1]=entries[1] with {EventId=4779,SessionId=""};entries[2]=entries[2] with {EventId=4778,SessionId=""};
+    var entries=MeetingDay();entries[1]=entries[1] with {EventId=4779,SessionId=""};
     var day=MeetingReport(entries);Equal(4779,day.Meeting!.Lock.EventId);Equal(2,day.Sections.Count);
     day=MeetingReport(entries.Skip(1));True(day.Incomplete);Equal(0,day.Sections.Count);
 });
