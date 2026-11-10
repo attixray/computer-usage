@@ -35,6 +35,7 @@ public sealed class MainWindow : Window
     private IReadOnlyList<LockEvent> cachedEvents = [];
     private IReadOnlyList<ActivityHeartbeat> activityHeartbeats = [];
     private IReadOnlyList<ActivityOpen> activityOpens = [];
+    private IReadOnlyList<MeasurementSpan> measurements = [];
     private TrayIcon? tray;
     private static readonly TimeSpan MonitorStartup = TimeSpan.FromSeconds(5);
     private readonly DateTime opened = DateTime.UtcNow;
@@ -176,7 +177,7 @@ public sealed class MainWindow : Window
     }
 
     private IReadOnlyList<WorkReport> Reports(AppSettings? settings = null) => WorkReports.Build(state.Events.Concat(cachedEvents), settings ?? state.Settings, state.Lunches,
-        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks, activityHeartbeats, activityOpens);
+        DateTimeOffset.Now, TimeZoneInfo.Local, state.Gaps, activityLocks, state.Meetings, state.SectionComments, breakNotes, state.BreakReasons, idleBreaks, activityHeartbeats, activityOpens, measurements);
 
     // The Windows log may reach back less than the history; events stored here or by the monitor cover the days before it.
     private DateTimeOffset? Oldest()
@@ -223,7 +224,7 @@ public sealed class MainWindow : Window
 
     private void ReadActivity()
     {
-        activityLocks = []; breakNotes = []; idleBreaks = []; cachedEvents = []; activityHeartbeats = []; activityOpens = [];
+        activityLocks = []; breakNotes = []; idleBreaks = []; cachedEvents = []; activityHeartbeats = []; activityOpens = []; measurements = [];
         try
         {
             var journal = ActivityMonitor.Journal;
@@ -235,6 +236,8 @@ public sealed class MainWindow : Window
             idleBreaks = sessions.SelectMany(s => s.AllIdles(DateTimeOffset.UtcNow)).ToArray();
             cachedEvents = journal.Events();
             activityHeartbeats = journal.Heartbeats();
+            measurements = new MeasurementJournal(Path.Combine(journal.DirectoryPath, "Measurements"))
+                .Read(DateTimeOffset.UtcNow.AddDays(-state.Settings.HistoryDays-1), DateTimeOffset.UtcNow);
             var sessionId = Process.GetCurrentProcess().SessionId.ToString(CultureInfo.InvariantCulture);
             var current = sessions.FirstOrDefault(s => s.SessionId == sessionId);
             var healthy = current?.StoppedAt is null && current is not null
@@ -483,6 +486,18 @@ public sealed class MainWindow : Window
         return new { lastInput = TimeValue(record.LastInputAt, true), idle = ActivityHistory.IdleText(record) };
     }
 
+    private object MeasurementSnapshot(WorkReport day)
+    {
+        var start = WorkDayClock.At(day.Date, state.Settings.DayStart, TimeZoneInfo.Local);
+        var end = day.Ongoing ? DateTimeOffset.Now : WorkDayClock.At(day.Date.AddDays(1), state.Settings.DayStart, TimeZoneInfo.Local);
+        return new { available = day.Measurements.Count > 0,
+            updates = day.Measurements.Sum(m => m.InputChanges),
+            rows = MeasurementSummary.Timeline(day.Measurements, start, end).Select(m => new {
+                from = TimeValue(m.From), to = TimeValue(m.To, true), kind = m.State,
+                session = m.SessionId, remote = m.Remote, updates = m.InputChanges, samples = m.Samples,
+                lastInput = TimeValue(m.LastInputAt) }) };
+    }
+
     // The window title shows today's worked time; an incomplete or missing day shows the app name only.
     private void UpdateTitle(IReadOnlyList<WorkReport> days)
     {
@@ -512,8 +527,8 @@ public sealed class MainWindow : Window
             incomplete = d.Incomplete, issues = d.Issues, first = TimeValue(d.First?.Timestamp), last = TimeValue(d.Last?.WorkTimestamp, true),
             firstFromSession = d.First?.IsSessionTransition ?? false, lastFromSession = d.Last?.IsSessionTransition ?? false,
             firstFromSignIn = d.First?.IsSignInOrOut ?? false, lastFromSignOut = d.Last?.IsSignInOrOut ?? false,
-            firstSystem = d.First?.IsSystemEvent == true || d.First?.EventId == LockEvent.ObservedUnlock || d.First?.IsManual == true ? d.First.Label : null,
-            lastSystem = d.Last?.IsSystemEvent == true ? d.Last.Label : null,
+            firstSystem = d.First?.IsSystemEvent == true || d.First?.EventId == LockEvent.ObservedUnlock || d.First?.IsManual == true || d.First?.IsDayBoundary == true ? d.First.Label : null,
+            lastSystem = d.Last?.IsSystemEvent == true || d.Last?.IsDayBoundary == true ? d.Last.Label : null,
             lastFromActivity = d.Last?.ActivityTimestamp is not null, lastActivity = ActivityValue(d.Last),
             manual = d.ManualLunch, none = d.NoLunch, undo = undo.ContainsKey(d.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             lunch = d.Lunch is null ? null : new { id = d.Lunch.Id, from = TimeValue(d.Lunch.Lock.WorkTimestamp, true), to = TimeValue(d.Lunch.Unlock.Timestamp), minutes = (int)d.Lunch.Duration.TotalMinutes },
@@ -522,7 +537,7 @@ public sealed class MainWindow : Window
             pairs = d.Pairs.Select(p => new { id = p.Id, from = TimeValue(p.Lock.WorkTimestamp, true), to = TimeValue(p.Unlock.Timestamp), minutes = (int)p.Duration.TotalMinutes,
                 fromActivity = p.Lock.ActivityTimestamp is not null, activity = ActivityValue(p.Lock),
                 reason = p.Reason, reasonText = p.ReasonText, reasonManual = p.ReasonManual, reasonAutomatic = p.ReasonAutomatic }),
-            sections = d.Sections.Select(RowSnapshot),
+            sections = d.Sections.Select(RowSnapshot), measurement = MeasurementSnapshot(d),
             copy = !d.Incomplete && !d.Ongoing ? string.Join("\r\n", d.Sections.Select(display.CopyRow)) : "",
             eventCopy = "Dátum\tIdőpont\tEsemény\tAzonosító\r\n" + string.Join("\r\n", d.Events.Select(e => $"{TimeZoneInfo.ConvertTime(e.Timestamp, TimeZoneInfo.Local):yyyy.MM.dd}\t{Presentation.Time(e.Timestamp, TimeZoneInfo.Local, true)}\t{e.Label}\t{e.EventId}")),
             hasSessionEvents = d.Events.Any(e => e.IsSessionTransition), hasSignInEvents = d.Events.Any(e => e.IsSignInOrOut),

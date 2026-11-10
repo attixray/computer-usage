@@ -242,6 +242,8 @@ ShutdownChecks.Run(Check);
 SessionObservationChecks.Run(Check);
 MinimumWorkChecks.Run(Check);
 ConnectionStateChecks.Run(Check);
+DayBoundaryChecks.Run(Check);
+MeasurementChecks.Run(Check);
 Check("An unexpected shutdown ends work at the last-alive time and the next sign-in continues the day", () =>
 {
     var day = Report([Event(16,"08:00",false), SystemEvent(16,"15:31:19",LockEvent.UnexpectedShutdown),
@@ -510,7 +512,7 @@ Check("RDP mode turns a long input gap without a lock into a break and moves a l
     Equal(1,session.AllIdles(now).Count());session.StoppedAt=now;Equal(0,session.AllIdles(now).Count());
     Throws<ArgumentException>(()=>(remote with {RemoteIdleMinutes=2}).Validate());
 });
-Check("Activity mode falls back to locks for unavailable samples and never moves a lock before its unlock or into another workday", () =>
+Check("Activity mode rejects unavailable or pre-unlock samples and keeps valid input across a workday boundary", () =>
 {
     var list = new[] {Event(16,"08:00",false),Event(16,"18:00",true)};
     var record = new ActivityLock(list[1].Timestamp,At(16,"17:45"),list[1].Timestamp.AddSeconds(-1),"1");
@@ -518,7 +520,7 @@ Check("Activity mode falls back to locks for unavailable samples and never moves
         Equal(At(16,"18:00"),WorkReports.Build(list,settings with {LockTimeSource="activity"},lunches,now,zone,activity:observations).Single().Sections[^1].To);
     var overnight = new[] {Event(15,"23:00",false),Event(16,"04:05",true)};
     var boundary = new ActivityLock(overnight[1].Timestamp,At(16,"03:59"),overnight[1].Timestamp.AddSeconds(-1),"1");
-    True(ActivityHistory.Apply(overnight,[boundary],settings with {LockTimeSource="activity"},zone).Last().ActivityTimestamp is null);
+    Equal(boundary.LastInputAt, ActivityHistory.Apply(overnight,[boundary],settings with {LockTimeSource="activity"},zone).Last().ActivityTimestamp);
     Equal(At(16,"18:00"),WorkReports.Build(list,settings,lunches,now,zone,activity:[record]).Single().Sections[^1].To);
 });
 
@@ -659,6 +661,23 @@ var reports = WorkReports.Build(allEvents,settings,lunches,now,zone);
 Dictionary<string,byte[]> Entries(string path) { using var z=ZipFile.OpenRead(path);return z.Entries.ToDictionary(e=>e.FullName,e=>{using var s=e.Open();using var m=new MemoryStream();s.CopyTo(m);return m.ToArray();}); }
 try
 {
+    Check("Details keeps a short calendar fragment of a qualifying overnight section and preserves workbook formulas", () =>
+    {
+        var path = Fixture("day-boundary");
+        DateTimeOffset Nov(int hour,int minute=0) => WorkDayClock.At(new(2026,11,8),new(hour,minute),zone);
+        var opened = new LockEvent(1,Nov(0,18),4801,"sid","Test","LOCAL","1","0x1");
+        var closed = opened with {RecordId=2,Timestamp=Nov(6,15),EventId=4800};
+        var days = WorkReports.Build([opened,closed],settings,new Dictionary<string,string>(),Nov(12).AddDays(2),zone,
+            idles:[new(Nov(4,5),Nov(6,15),"1")]);
+        var plan = service.Preview(path,days,settings.MinimumWorkMinutes);
+        Equal(2,plan.Rows.Count);Equal(TimeSpan.FromMinutes(5),plan.Rows[1].Duration);
+        True(plan.Rows[1].UnsplitDuration>TimeSpan.FromHours(3));
+        service.Commit(plan,[]);
+        using var book = new XLWorkbook(path);var sheet=book.Worksheet("Details");
+        Equal(new DateTime(2026,11,7),sheet.Cell(3,1).GetDateTime());Equal(new DateTime(2026,11,8),sheet.Cell(4,1).GetDateTime());
+        Equal(TimeSpan.FromHours(4),sheet.Cell(3,3).GetTimeSpan());Equal(TimeSpan.FromHours(4),sheet.Cell(4,2).GetTimeSpan());
+        Equal("MOD(C2-B2,1)",sheet.Cell(2,4).FormulaA1);Equal("Existing description",sheet.Cell(2,6).GetString());
+    });
     Check("Details append and copying use the same filtered sections without overwriting existing rows", () =>
     {
         var path = Fixture("minimum-work");

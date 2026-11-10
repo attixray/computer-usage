@@ -118,6 +118,11 @@
       finally { savingComments=null; }
     }
   }
+  function measurementDetails(day) {
+    const m=day.measurement;
+    const kinds={'sampling':'Aktív mintavételezés','inactive':'Zárolt vagy leválasztott','disabled':'Aktivitásfigyelés kikapcsolva','unavailable':'Munkamenetállapot nem olvasható','input-error':'Inputidő nem olvasható','error':'Mérési hiba','gap':'Mérési kimaradás','unknown':'Nincs mérési adat','clock-change':'Rendszeróra változott','stopped':'Figyelő leállítva'};
+    return `<details data-measurement style="margin-top:12px"><summary>Mérési napló</summary>${!m?.available?'<p class="cu-sub">Ehhez a naphoz nincs mérési folytonossági adat. A korábbi aktivitás utólag nem igazolható.</p>':`<p class="cu-note"><span>Windows-inputidő változásai:</span> ${m.updates}</p><p class="cu-sub">A mintavételezés és az inputidő változása külön adat. A Windows által jelzett input nem bizonyít emberi munkavégzést. Az ismeretlen időt a napló nem igazolja.</p><div class="cu-table-wrap"><table><thead><tr><th>Kezdés</th><th>Befejezés</th><th>Mérés állapota</th><th>Munkamenet</th><th>Minták</th><th>Inputváltozások</th><th>Utolsó észlelt input</th></tr></thead><tbody>${m.rows.map(r=>`<tr><td>${time(r.from,'Kezdés',false,day.date)}</td><td>${time(r.to,'Befejezés',false,day.date)}</td><td><span>${esc(kinds[r.kind]||r.kind)}</span>${r.remote===true?' · RDP':r.remote===false?' · <span>helyi</span>':''}</td><td>${esc(r.session||'—')}</td><td>${r.kind==='sampling'?r.samples:'—'}</td><td>${r.kind==='sampling'?r.updates:'—'}</td><td>${r.lastInput?time(r.lastInput,'Utolsó észlelt input',false,day.date):'—'}</td></tr>`).join('')}</tbody></table></div>`}</details>`;
+  }
   function dayDetails(day) {
     const meetingEnabled=state.settings.ignoreDailyMeeting;
     return `<section class="cu-detail"><details class="cu-pair-details" data-pair-details="${day.key}" ${pairDetails.has(day.key)?'open':''}><summary>Lock / unlock párok (${day.pairs.length})</summary>
@@ -129,6 +134,7 @@
       <p class="cu-sub">Az ebédet és a napi meetinget (standup) az Ok oszlopban lehet kiválasztani; a — kézi választás kizárja a párt a becslésből.</p>
       ${day.manual||day.undo||meetingEnabled&&day.manualMeeting?`<div class="cu-row cu-lunch-actions">${day.manual?`<button class="cu-quiet" data-auto="${day.key}">${icon('sparkles')}Becslés használata</button>`:''}${meetingEnabled&&day.manualMeeting?`<button class="cu-quiet" data-meeting-auto="${day.key}">${icon('sparkles')}Meeting becslése</button>`:''}${day.undo?`<button data-undo="${day.key}">${icon('undo-2')}Visszavonás</button>`:''}</div>`:''}</details>
       ${sectionRows(day)}
+      ${measurementDetails(day)}
       <details style="margin-top:12px"><summary>Összes naplóesemény (${day.events.length})</summary><div class="cu-row cu-detail-top"><button class="cu-quiet" data-copy="${esc(day.eventCopy)}">${icon('copy')}Napló másolása</button></div><div class="cu-table-wrap"><table><thead><tr><th>Dátum</th><th>Időpont</th><th>Esemény</th><th>Azonosító</th><th>Utolsó aktivitás zárolás előtt</th></tr></thead><tbody>${day.events.map(e=>`<tr><td>${field(e.time.date,'Esemény dátuma')}</td><td>${time(e.time,'Esemény időpontja')}</td><td>${esc(e.label)}${e.correctionId?` <button class="cu-quiet" data-remove-correction="${esc(e.correctionId)}" title="Kézi korrekció visszavonása" aria-label="Kézi korrekció visszavonása">${icon('undo-2')}</button>`:''}</td><td>${e.eventId}</td><td>${(e.isLock??e.eventId===4800)?activityDetail(e.activity,day.date):'—'}</td></tr>`).join('')}</tbody></table></div></details></section>`;
   }
   function accessWarning() {

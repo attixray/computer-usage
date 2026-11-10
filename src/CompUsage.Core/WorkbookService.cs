@@ -29,7 +29,7 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         if (minimumWorkMinutes is < 0 or > 1440) throw new ArgumentOutOfRangeException(nameof(minimumWorkMinutes));
         var minimumWork = TimeSpan.FromMinutes(minimumWorkMinutes);
         // Do not start an Excel row for a provisional section that may be filtered when it closes.
-        bool Recordable(WorkInterval section) => section.Duration >= minimumWork;
+        bool Recordable(WorkInterval section) => (section.UnsplitDuration ?? section.Duration) >= minimumWork;
         ValidatePath(path);
         var bytes = File.ReadAllBytes(path);
         using var buffer = new MemoryStream(bytes);

@@ -21,8 +21,10 @@ public sealed record LockEvent(
     public const int IdleStart = 90001, IdleEnd = 90002;
     public const int ObservedUnlock = 90003;
     public const int ManualUnlock = 90004;
+    public const int DayBoundaryStart = 90005, DayBoundaryEnd = 90006;
+    public bool IsDayBoundary => EventId is DayBoundaryStart or DayBoundaryEnd;
     public bool IsManual => EventId == ManualUnlock;
-    public bool IsLock => EventId is 4800 or 4779 or 4647 or Sleep or UnexpectedShutdown or SystemShutdown or IdleStart;
+    public bool IsLock => EventId is 4800 or 4779 or 4647 or Sleep or UnexpectedShutdown or SystemShutdown or IdleStart or DayBoundaryEnd;
     public bool IsSessionTransition => EventId is 4778 or 4779;
     public bool IsSignInOrOut => EventId is 4624 or 4647;
     public bool IsSystemEvent => EventId is Sleep or Wake or UnexpectedShutdown or SystemShutdown;
@@ -38,6 +40,8 @@ public sealed record LockEvent(
         IdleEnd => "Aktivitás újra (RDP)",
         ObservedUnlock => "Feloldott állapot észlelve",
         ManualUnlock => "Kézi feloldás (becsült)",
+        DayBoundaryStart => "Áthúzódó munkaszakasz",
+        DayBoundaryEnd => "Munkanap vége (naphatár)",
         4624 => "Bejelentkezés",
         4647 => "Kijelentkezés / leállítás",
         4778 => "Munkamenet csatlakoztatása",

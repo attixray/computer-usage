@@ -297,6 +297,32 @@ const {parseHTML} = require('linkedom');
     assert.match(text,/Utána új sorként/);assert.equal(document.querySelectorAll('[data-partial-following]').length,1);assert.match(text,/üresen marad \(folyamatban\)/);
     assert.match(text,/legfeljebb 3 perccel/);previewPartials=[];await click('[data-close-plan]');
   });
+  await check('Calendar carry uses explicit labels without adding fake Windows records to the event list',async()=>{
+    const original=clone(state.days[0]),language=state.settings.language,day=state.days[0];
+    Object.assign(day,{first:time('4:00','04:00:00'),last:time('4:00','04:00:00'),firstSystem:'Áthúzódó munkaszakasz',lastSystem:'Munkanap vége (naphatár)'});
+    state.settings.language='hu';await click('[data-refresh]');
+    assert.match(node('.cu-metrics').textContent,/Áthúzódó munkaszakasz/);assert.match(node('.cu-metrics').textContent,/Munkanap vége \(naphatár\)/);
+    state.settings.language='en';await click('[data-refresh]');
+    assert.match(node('.cu-metrics').textContent,/Work carried over from the previous day/);assert.match(node('.cu-metrics').textContent,/End of workday \(day boundary\)/);
+    assert.ok(day.events.every(e=>e.eventId!==90005&&e.eventId!==90006));
+    state.days[0]=original;state.settings.language=language;await click('[data-refresh]');
+  });
+  await check('Measurement details distinguish healthy idle sampling, actual input updates, gaps and unavailable old evidence',async()=>{
+    const original=clone(state.days[0]),language=state.settings.language,day=state.days[0];
+    state.settings.language='hu';await click('[data-refresh]');
+    assert.match(node('[data-measurement]').textContent,/nincs mérési folytonossági adat/);
+    const span=(kind,updates,samples)=>({from:time('8:00','08:00:00'),to:time('8:01','08:01:00'),kind,session:'1',remote:true,updates,samples,lastInput:kind==='sampling'?time('8:00','08:00:14'):null});
+    day.measurement={available:true,updates:2,rows:[span('sampling',0,60),span('gap',0,0),span('sampling',2,60),span('unknown',0,0)]};
+    await click('[data-refresh]');
+    assert.match(node('[data-measurement]').textContent,/Aktív mintavételezés/);assert.match(node('[data-measurement]').textContent,/Mérési kimaradás/);
+    assert.equal(node('[data-measurement] tbody').children.length,4);
+    state.settings.language='en';await click('[data-refresh]');
+    const text=node('[data-measurement]').textContent;
+    assert.match(text,/Sampling input time/);assert.match(text,/Measurement gap/);assert.match(text,/No measurement data/);assert.match(text,/Windows input-time updates: 2/);
+    assert.match(text,/Samples/);assert.match(text,/does not prove human work/);
+    day.measurement={available:false,rows:[]};await click('[data-refresh]');assert.match(node('[data-measurement]').textContent,/Earlier activity cannot be verified retrospectively/);
+    state.days[0]=original;state.settings.language=language;await click('[data-refresh]');
+  });
   await check('Activation and the minute timer refresh silently, never over an open preview, and are throttled',async()=>{
     const refreshes=()=>calls.filter(c=>c.command==='refresh').length;
     await click('[data-append]');const before=refreshes();

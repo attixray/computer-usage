@@ -178,8 +178,7 @@ public static class ActivityHistory
             else if (settings.LockTimeSource is "activity" or "remote" && Match(observations, entry) is { LastInputAt: { } input } match
                 && (settings.LockTimeSource == "activity" || match.Remote == true)
                 && Capture(match.LockedAt, input, match.SampledAt, match.SessionId).LastInputAt is not null
-                && input <= entry.Timestamp && starts.TryGetValue(entry.SessionKey, out var from) && input >= from
-                && WorkDayClock.GetDate(input, settings.DayStart, zone) == WorkDayClock.GetDate(entry.Timestamp, settings.DayStart, zone))
+                && input <= entry.Timestamp && starts.TryGetValue(entry.SessionKey, out var from) && input >= from)
                 current = current with { ActivityTimestamp = input };
             yield return current;
         }

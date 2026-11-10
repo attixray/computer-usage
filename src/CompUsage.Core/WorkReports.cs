@@ -13,6 +13,8 @@ public sealed record BreakPair(LockEvent Lock, LockEvent Unlock)
 }
 public sealed record WorkInterval(DateOnly Date, DateTimeOffset From, DateTimeOffset To, bool Open = false)
 {
+    // Calendar clipping must not turn a qualifying continuous section into discarded short fragments.
+    public TimeSpan? UnsplitDuration { get; init; }
     private string comment = "";
     public string Id => string.Create(CultureInfo.InvariantCulture,$"{Date:yyyy-MM-dd}|{From.UtcTicks}");
     public string Comment
@@ -37,6 +39,7 @@ public sealed record WorkReport(DateOnly Date, IReadOnlyList<LockEvent> Events, 
     public BreakPair? Meeting { get; init; }
     public bool ManualMeeting { get; init; }
     public bool NoMeeting { get; init; }
+    public IReadOnlyList<MeasurementSpan> Measurements { get; init; } = [];
     public bool Incomplete => Issues.Count > 0;
     public string Status => Incomplete ? "Hiányos" : Ongoing ? "Folyamatban" : "Lezárt";
 }
@@ -50,7 +53,7 @@ public static class WorkReports
         IReadOnlyDictionary<string, string>? comments = null,
         IEnumerable<BreakNote>? breaks = null, IReadOnlyDictionary<string, string>? reasons = null,
         IEnumerable<IdleBreak>? idles = null, IEnumerable<ActivityHeartbeat>? heartbeats = null,
-        IEnumerable<ActivityOpen>? opens = null)
+        IEnumerable<ActivityOpen>? opens = null, IEnumerable<MeasurementSpan>? measurements = null)
     {
         settings.Validate();
         var today = WorkDayClock.GetDate(now, settings.DayStart, zone);
@@ -71,18 +74,29 @@ public static class WorkReports
             .OrderBy(e => e.Timestamp).ThenBy(e => e.RecordId)
             .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
         // An RDP idle break across the day start can open a day that has no Windows event of its own.
-        var workDays = ActivityHistory.Idle(ActivityHistory.Apply(transitions, activityRecords, settings, zone), idles ?? [], settings, now)
-            .GroupBy(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToDictionary(g => g.Key, g => g.ToArray());
+        var measured = (measurements ?? []).ToArray();
+        var calculated = ActivityHistory.Idle(ActivityHistory.Apply(transitions, activityRecords, settings, zone), idles ?? [], settings, now);
+        var partitionTimeline = WorkDayPartition.WithLiveEnd(calculated, measured, now);
+        var workDays = WorkDayPartition.Days(partitionTimeline, settings, zone);
+        if (partitionTimeline.Count > calculated.Count && workDays.TryGetValue(today, out var liveDay))
+            workDays[today] = liveDay.Where(e => !(e.EventId == LockEvent.DayBoundaryEnd && e.Timestamp == now)).ToArray();
+        var allPairs = calculated.Zip(calculated.Skip(1)).Where(p => p.First.IsLock && !p.Second.IsLock && p.Second.Timestamp > p.First.WorkTimestamp)
+            .Select(p => WithReason(new BreakPair(p.First, p.Second), breakNotes, reasonChoices)).ToArray();
         var unverified = SessionEvents.UnverifiedConnections(raw).Select(e => WorkDayClock.GetDate(e.Timestamp, settings.DayStart, zone)).ToHashSet();
-        return workDays.Keys.Concat(originalDays.Keys).Distinct().Where(date => date >= firstDate && date <= today).OrderDescending()
-            .Select(date => BuildDay(date, workDays.GetValueOrDefault(date, []), originalDays.GetValueOrDefault(date, []), settings, lunches, meetingChoices, now, zone, gaps ?? [], breakNotes, reasonChoices, unverified.Contains(date)))
-            .Select(day => day with { Sections = day.Sections.Select(s => s with { Comment = notes.GetValueOrDefault(s.Id, "") }).ToArray() }).ToArray();
+        // Choices just before the visible range can still affect a section carried into its first day.
+        var days = workDays.Keys.Concat(originalDays.Keys).Distinct().Where(date => date <= today).OrderDescending()
+            .Select(date => BuildDay(date, workDays.GetValueOrDefault(date, []), originalDays.GetValueOrDefault(date, []), settings, lunches, meetingChoices, now, zone, gaps ?? [],
+                allPairs.Where(p => WorkDayClock.GetDate(p.Lock.WorkTimestamp, settings.DayStart, zone) == date).ToArray(), unverified.Contains(date))).ToArray();
+        var sections = WorkDayPartition.Sections(partitionTimeline, days, allPairs, settings, now, zone);
+        return days.Where(day => day.Date >= firstDate).Select(day => day with { Measurements = measured.Where(m => m.To >= WorkDayClock.At(day.Date, settings.DayStart, zone)
+                && m.From < WorkDayClock.At(day.Date.AddDays(1), settings.DayStart, zone)).ToArray(), Sections = day.Incomplete ? [] : sections.Where(s => s.Date == day.Date)
+            .Select(s => s with { Comment = notes.GetValueOrDefault(s.Id, "") }).ToArray() }).ToArray();
     }
 
     private static WorkReport BuildDay(DateOnly date, LockEvent[] list, LockEvent[] raw, AppSettings settings,
         IReadOnlyDictionary<string, string> lunches, IReadOnlyDictionary<string, string> meetings,
         DateTimeOffset now, TimeZoneInfo zone, IEnumerable<LoggingGap> gaps,
-        IReadOnlyList<BreakNote> breaks, IReadOnlyDictionary<string, string> reasons, bool unverifiedConnection)
+        IReadOnlyList<BreakPair> pairs, bool unverifiedConnection)
     {
         var ongoing = date == WorkDayClock.GetDate(now, settings.DayStart, zone);
         var issues = new List<string>();
@@ -99,26 +113,16 @@ public static class WorkReports
         var end = ongoing ? now : WorkDayClock.At(date.AddDays(1), settings.DayStart, zone);
         if (gaps.Any(g => g.From < end && (g.To ?? now) > start))
             issues.Add("A nap egy részében a naplózás ki volt kapcsolva.");
-        // Consecutive sessions pair across a restart: the sign-out/sign-in gap is an ordinary break.
-        string PairKey(LockEvent e) => sequential ? "" : e.SessionKey;
-        var pending = new Dictionary<string, LockEvent>();
-        var pairs = new List<BreakPair>();
-        foreach (var e in list)
-        {
-            if (e.IsLock) pending[PairKey(e)] = e;
-            else if (pending.Remove(PairKey(e), out var locked) && e.Timestamp > locked.Timestamp)
-                pairs.Add(WithReason(new BreakPair(locked, e), breaks, reasons));
-        }
         var expected = WorkDayClock.At(settings.ExpectedLunch < settings.DayStart ? date.AddDays(1) : date,
             settings.ExpectedLunch, zone);
         var key = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var manual = lunches.TryGetValue(key, out var chosen);
-        var explicitLunch = manual ? pairs.Find(p => p.Id == chosen) : null;
+        var explicitLunch = manual ? pairs.FirstOrDefault(p => p.Id == chosen) : null;
         var manualMeeting = settings.IgnoreDailyMeeting && meetings.ContainsKey(key);
         var chosenMeeting = meetings.GetValueOrDefault(key);
         // A pair answered as standup is the daily meeting; a pair answered otherwise is not a meeting candidate.
         var meeting = !settings.IgnoreDailyMeeting ? null : manualMeeting
-            ? pairs.Find(p => p.Id == chosenMeeting && p.Id != explicitLunch?.Id)
+            ? pairs.FirstOrDefault(p => p.Id == chosenMeeting && p.Id != explicitLunch?.Id)
             : pairs.Where(p => p.Id != explicitLunch?.Id && p.Reason == BreakReasons.Standup).OrderBy(p => p.Lock.WorkTimestamp).FirstOrDefault()
                 ?? pairs.Where(p => p.Id != explicitLunch?.Id && p.Reason is null && !p.ReasonManual && p.Duration > TimeSpan.Zero
                     && p.Duration.TotalMinutes <= settings.MaximumMeetingMinutes && IsMeetingStart(p.Lock.WorkTimestamp, settings, zone))
@@ -135,25 +139,7 @@ public static class WorkReports
         if (manual && chosen != "none" && lunch is null) issues.Add("A korábban választott ebédpár már nem található; válaszd ki újra.");
         var first = list.FirstOrDefault(e => !e.IsLock);
         var last = list.LastOrDefault(e => e.IsLock);
-        var sections = new List<WorkInterval>();
-        if (issues.Count == 0 && first is not null)
-        {
-            var to = list[^1].IsLock ? list[^1].WorkTimestamp : now;
-            var from = first.Timestamp;
-            foreach (var gap in pairs.Where(p => p.Lock.WorkTimestamp >= from && p.Unlock.Timestamp <= to
-                         && (p.Id == lunch?.Id || p.Id != meeting?.Id && !BreakReasons.CountsAsWork(p.Reason)
-                             && p.Duration.TotalMinutes > settings.SplitBreakMinutes)).OrderBy(p => p.Lock.WorkTimestamp))
-            {
-                if (gap.Lock.WorkTimestamp > from) sections.Add(new(date, from, gap.Lock.WorkTimestamp));
-                from = gap.Unlock.Timestamp;
-            }
-            if (to > from) sections.Add(new(date, from, to, ongoing && !list[^1].IsLock));
-            // Apply the minimum after break merging and activity endpoints, using exact durations.
-            // Keep the live section provisional until it closes; raw events and pairs remain available.
-            var minimumWork = TimeSpan.FromMinutes(settings.MinimumWorkMinutes);
-            sections.RemoveAll(s => !s.Open && s.Duration < minimumWork);
-        }
-        return new(date, raw, pairs, first, last, lunch, manual, chosen == "none", ongoing, issues, sections)
+        return new(date, raw, pairs, first, last, lunch, manual, chosen == "none", ongoing, issues, [])
         { Meeting = meeting, ManualMeeting = manualMeeting, NoMeeting = settings.IgnoreDailyMeeting && chosenMeeting == "none" };
     }
 

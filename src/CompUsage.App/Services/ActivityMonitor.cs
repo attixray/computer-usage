@@ -181,6 +181,8 @@ public static class ActivityMonitor
             if (usable && journal.Load(SessionId).Opens.Count <= openCount) return 7;
             if (Stop(directory) != 0 || !child.WaitForExit(5000) || child.ExitCode != 0) return 7;
             if (journal.ReadAll().Single().StoppedAt is null) return 7;
+            var evidence = new MeasurementJournal(Path.Combine(directory, "Measurements")).Read(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow);
+            if (!evidence.Any(m => m.State == "stopped") || usable && !evidence.Any(m => m.State == "sampling" && m.Samples > 0)) return 7;
             // Disabling survives a later Windows-startup invocation, without starting a collector.
             journal.Configure(false);
             using var paused = Process.Start(new ProcessStartInfo(Environment.ProcessPath!)
@@ -203,6 +205,8 @@ public static class ActivityMonitor
         private readonly Application app;
         private readonly ActivityJournal journal;
         private readonly ActivitySession state;
+        private readonly MeasurementRecorder measurements;
+        private readonly MeasurementJournal measurementJournal;
         private readonly EventWaitHandle stop;
         private readonly DispatcherTimer timer;
         private readonly HwndSource window;
@@ -238,6 +242,10 @@ public static class ActivityMonitor
             using (var identity = System.Security.Principal.WindowsIdentity.GetCurrent())
                 state.LogonId = SecurityEventService.LogonId(identity) ?? "";
             state.StartedAt = DateTimeOffset.UtcNow; state.ProcessId = Environment.ProcessId; state.StoppedAt = null; state.LastInputAt = null; state.LockedAt = null; state.SessionEnded = false;
+            measurementJournal = new MeasurementJournal(Path.Combine(journal.DirectoryPath, "Measurements"));
+            measurementJournal.RecoverCheckpoint(state.SessionId);
+            measurementJournal.Prune(state.StartedAt);
+            measurements = new(measurementJournal, state.SessionId, state.LogonId);
             window = new HwndSource(new HwndSourceParameters(title) { Width = 0, Height = 0, WindowStyle = 0 });
             window.AddHook(Messages);
             var id = int.Parse(session, CultureInfo.InvariantCulture);
@@ -287,6 +295,7 @@ public static class ActivityMonitor
                 }
                 // Input times are only sampled when activity tracking is on; session-state observations contain no input.
                 if (state.Enabled && !locked && usable == true) Sample();
+                else measurements.Observe(DateTimeOffset.UtcNow, !state.Enabled ? "disabled" : usable is null ? "unavailable" : "inactive");
                 state.Error = registered ? null : "Session notifications are unavailable; retrying.";
                 if (observedOpen) Save(true);
                 if (ticks % 60 == 1 && !locked) UpdateGoal();
@@ -294,18 +303,24 @@ public static class ActivityMonitor
                 if (ticks++ % 5 == 0) Save();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
-            { state.Error = ex.Message; sampledAt = null; }
+            {
+                state.Error = ex.Message; sampledAt = null;
+                try { measurements.Observe(DateTimeOffset.UtcNow, "error"); }
+                catch (Exception writeError) when (writeError is IOException or UnauthorizedAccessException) { }
+            }
         }
 
         private void Sample()
         {
             var input = new LastInput { Size = (uint)Marshal.SizeOf<LastInput>() };
             var now = DateTimeOffset.UtcNow;
-            if (!GetLastInputInfo(ref input)) { sampledAt = null; state.LastInputAt = null; return; }
+            if (!GetLastInputInfo(ref input))
+            { sampledAt = null; state.LastInputAt = null; measurements.Observe(now, "input-error"); return; }
             state.LastInputAt = ActivityHistory.InputTime(now, GetTickCount64(), input.Tick);
             sampledAt = state.LastInputAt is null ? null : now;
             // Sampled with the input, so a lock right before an RDP disconnect still counts as remote.
             remote = GetSystemMetrics(SmRemoteSession) != 0;
+            measurements.Observe(now, state.LastInputAt is null ? "input-error" : "sampling", remote, input.Tick, state.LastInputAt);
             TrackIdle(now);
         }
 
@@ -485,7 +500,8 @@ public static class ActivityMonitor
         private WorkReport? Today(SharedState shared, IReadOnlyList<LockEvent> events, DateTimeOffset now) =>
             WorkReports.Build(events.Concat(journal.Events()).Concat(shared.Corrections ?? []), shared.Settings with { HistoryDays = 1 }, shared.Lunches, now, TimeZoneInfo.Local, shared.Gaps, state.Locks,
                 shared.Meetings, null, state.Breaks, shared.BreakReasons, state.AllIdles(DateTimeOffset.UtcNow), journal.Heartbeats(),
-                journal.ReadAll().SelectMany(s => s.Opens).Concat(state.Opens))
+                journal.ReadAll().SelectMany(s => s.Opens).Concat(state.Opens),
+                measurements: measurements.Current is { } span ? new[] { span } : [])
             .FirstOrDefault(d => d.Date == WorkDayClock.GetDate(now, shared.Settings.DayStart, TimeZoneInfo.Local));
 
         // Today's worked time from the Security log, with the app's day choices and this monitor's answers; also refreshes the tray list.
@@ -532,6 +548,7 @@ public static class ActivityMonitor
 
         private void Save(bool history = false)
         {
+            measurementJournal.Checkpoint(measurements.Current);
             state.HeartbeatAt = DateTimeOffset.UtcNow;
             if (history) journal.Save(state, state.HeartbeatAt);
             journal.Heartbeat(state, state.HeartbeatAt);
@@ -545,6 +562,7 @@ public static class ActivityMonitor
             if (registered) WTSUnRegisterSessionNotification(window.Handle);
             window.Dispose();
             state.StoppedAt = DateTimeOffset.UtcNow;
+            try { measurements.Stop(state.StoppedAt.Value); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             try { Save(true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
