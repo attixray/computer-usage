@@ -11,6 +11,8 @@ public sealed record PartialRow(int Row, WorkInterval Interval)
     public IReadOnlyList<WorkInterval> Following { get; init; } = [];
     // False when the row is already complete: Interval is then the first appended section, not a completion.
     public bool CompletesRow { get; init; } = true;
+    // A date-only prepared row needs both its From cell and, when closed, its To cell.
+    public bool FillsStart { get; init; }
     public IEnumerable<WorkInterval> Appended => CompletesRow ? Following : Following.Prepend(Interval);
 }
 public sealed record WorkbookPlan(string Path, string Fingerprint, DateOnly? LastDate,
@@ -51,6 +53,20 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
         {
             var sections = days.Where(d => d.Date == date && !d.Incomplete).SelectMany(d => d.Sections).Where(Recordable).OrderBy(s => s.From).ToArray();
             var from = ReadTime(Cell(row, "B"), strings);
+            if (RowNumber(row) == lastRow && EmptyTime(Cell(row, "B"), strings) && EmptyTime(Cell(row, "C"), strings))
+            {
+                // A prepared date is not a completed day. Reuse its empty last row for the next
+                // unrecorded section, preserving its formulas and description, then append later sections.
+                var previous = dated.Where(r => r.Date == date && RowNumber(r.Row) < lastRow).Select(r => r.Row).ToArray();
+                if (sections.Length == 0 || previous.Any(r => ReadTime(Cell(r,"B"),strings) is not { } f || !Clock(f)
+                    || ReadTime(Cell(r,"C"),strings) is not { } t || !Clock(t))) continue;
+                var ends = previous.Select(r => RowSpan(date!.Value, ReadTime(Cell(r,"B"),strings)!.Value,
+                    ReadTime(Cell(r,"C"),strings)!.Value, sections).To).ToArray();
+                var end = ends.Length == 0 ? (DateTimeOffset?)null : ends.Max();
+                var remaining = end is null ? sections : LaterSections(sections, end.Value);
+                if (remaining.Length > 0) partials.Add(new(lastRow, remaining[0]) { FillsStart = true, Following = remaining[1..] });
+                continue;
+            }
             if (!string.IsNullOrWhiteSpace(Text(Cell(row, "C"), strings)))
             {
                 // A complete last row, for example written during a break, continues with the day's later work: whole later
@@ -58,8 +74,7 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                 if (RowNumber(row) != lastRow || from is null || ReadTime(Cell(row, "C"), strings) is not { } to
                     || !Clock(from.Value) || !Clock(to) || sections.Length == 0) continue;
                 var (_, end) = RowSpan(date!.Value, from.Value, to, sections);
-                var later = sections.Where(s => s.From >= end || (s.Open ? s.To > end : s.To - end > PartialStartTolerance))
-                    .Select(s => s.From < end ? s with { From = end } : s).ToArray();
+                var later = LaterSections(sections, end);
                 if (later.Length > 0) partials.Add(new(RowNumber(row), later[0]) { CompletesRow = false, Following = later[1..] });
                 continue;
             }
@@ -128,8 +143,9 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
                 foreach (var partial in plan.Partials.Where(p => p.CompletesRow && selectedPartials.Contains(p.Row)))
                 {
                     var row = data.Elements(Ns + "row").Single(r => RowNumber(r) == partial.Row);
-                    Set(row, "C", partial.Row, LocalFraction(partial.Interval.To), template);
-                    FormatRow(row, sheet, styles, formats, true, plan.Formats);
+                    if (partial.FillsStart) Set(row, "B", partial.Row, LocalFraction(partial.Interval.From), template);
+                    if (!partial.Interval.Open) Set(row, "C", partial.Row, LocalFraction(partial.Interval.To), template);
+                    FormatRow(row, sheet, styles, formats, !partial.FillsStart, plan.Formats);
                 }
                 var dimension = sheet.Root.Element(Ns + "dimension");
                 if (dimension is not null)
@@ -249,6 +265,10 @@ public sealed class WorkbookService(TimeZoneInfo zone, CultureInfo? culture = nu
     // A row's From/To are clock times on its work date. A start after midnight belongs to the next calendar day when
     // that still falls within the day's recorded work, and an end not after the start crosses midnight.
     private static bool Clock(TimeSpan time) => time >= TimeSpan.Zero && time < TimeSpan.FromDays(1);
+    private static bool EmptyTime(XElement? cell, string[] strings) => string.IsNullOrWhiteSpace(Text(cell,strings)) && cell?.Element(Ns+"f") is null;
+    private static WorkInterval[] LaterSections(IEnumerable<WorkInterval> sections, DateTimeOffset end) =>
+        sections.Where(s => s.From >= end || (s.Open ? s.To > end : s.To - end > PartialStartTolerance))
+            .Select(s => s.From < end ? s with { From = end } : s).ToArray();
     private (DateTimeOffset From, DateTimeOffset To) RowSpan(DateOnly date, TimeSpan from, TimeSpan to, IReadOnlyList<WorkInterval> sections)
     {
         var start = WorkDayClock.At(date, TimeOnly.FromTimeSpan(from), zone);

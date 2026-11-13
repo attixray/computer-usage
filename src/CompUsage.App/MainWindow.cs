@@ -477,7 +477,7 @@ public sealed class MainWindow : Window
     {
         display = new ExcelDisplay(plan.Formats, excelCulture, TimeZoneInfo.Local);
         return new { token, rows = plan.Rows.Select(RowSnapshot), partials = plan.Partials.Select(p => new
-        { row = p.Row, section = RowSnapshot(p.Interval), following = p.Following.Select(RowSnapshot), completesRow = p.CompletesRow }) };
+        { row = p.Row, section = RowSnapshot(p.Interval), following = p.Following.Select(RowSnapshot), completesRow = p.CompletesRow, fillsStart = p.FillsStart }) };
     }
 
     private object? ActivityValue(LockEvent? entry)

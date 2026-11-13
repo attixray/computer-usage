@@ -872,6 +872,79 @@ try
         Equal(0,service.Preview(path,days).Partials.Count);
     });
     Check("Unselected partial remains unchanged",()=>{var path=Fixture("partial");service.Commit(service.Preview(path,reports),[]);using var b=new XLWorkbook(path);True(b.Worksheet("Details").Cell(2,3).IsEmpty());});
+    Check("A date-only last row after one completed section is filled and the day's other sections follow without duplicates",()=>
+    {
+        var path=Fixture("prepared-after-complete");
+        var entries=new[]{Event(16,"08:27:50",false),Event(16,"09:00:02",true),Event(16,"09:39:10",false),Event(16,"11:50:27",true),
+            Event(16,"12:06:45",false),Event(16,"19:23:22",true),Event(16,"19:43:19",false),Event(16,"20:06:19",true)};
+        var days=WorkReports.Build(entries,settings,lunches,now,zone);Equal(4,days.Single().Sections.Count);
+        using(var b=new XLWorkbook(path))
+        {
+            var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,16);s.Cell(2,2).Value=TimeSpan.Parse("08:27:50");s.Cell(2,3).Value=TimeSpan.Parse("09:00:02");
+            s.Cell(3,1).Value=new DateTime(2026,10,16);s.Cell(3,4).FormulaA1="MOD(C3-B3,1)";s.Cell(3,5).FormulaA1="D3*24";s.Cell(3,6).Value="Prepared description";b.Save();
+        }
+        var p=service.Preview(path,days,settings.MinimumWorkMinutes);Equal(0,p.Rows.Count);Equal(1,p.Partials.Count);
+        var c=p.Partials.Single();Equal(3,c.Row);True(c.FillsStart&&c.CompletesRow);Equal(2,c.Following.Count);Equal(At(16,"09:39:10"),c.Interval.From);
+        var before=File.ReadAllBytes(path);var backup=service.Commit(p,[3]);True(File.ReadAllBytes(backup).SequenceEqual(before));
+        using(var b=new XLWorkbook(path))
+        {
+            var s=b.Worksheet("Details");Equal(TimeSpan.Parse("09:00:02"),s.Cell(2,3).GetTimeSpan());
+            Equal(TimeSpan.Parse("09:39:10"),s.Cell(3,2).GetTimeSpan());Equal(TimeSpan.Parse("11:50:27"),s.Cell(3,3).GetTimeSpan());
+            Equal("MOD(C3-B3,1)",s.Cell(3,4).FormulaA1);Equal("D3*24",s.Cell(3,5).FormulaA1);Equal("Prepared description",s.Cell(3,6).GetString());
+            Equal(TimeSpan.Parse("12:06:45"),s.Cell(4,2).GetTimeSpan());Equal(TimeSpan.Parse("20:06:19"),s.Cell(5,3).GetTimeSpan());True(s.Cell(6,1).IsEmpty());
+        }
+        var repeated=service.Preview(path,days);Equal(0,repeated.Partials.Count);Equal(0,repeated.Rows.Count);
+    });
+    Check("A date-only day with no earlier rows starts with its first section and retains exact source seconds",()=>
+    {
+        var path=Fixture("prepared-empty-day");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,16);s.Cell(2,2).Clear(XLClearOptions.Contents);b.Save();}
+        var days=WorkReports.Build(Day(16),settings,lunches,now,zone);var p=service.Preview(path,days);
+        var c=p.Partials.Single();True(c.FillsStart);Equal(1,c.Following.Count);service.Commit(p,[2]);
+        using var result=new XLWorkbook(path);var sheet=result.Worksheet("Details");
+        Equal(TimeSpan.Parse("08:02:14"),sheet.Cell(2,2).GetTimeSpan());Equal(TimeSpan.Parse("11:32:05"),sheet.Cell(2,3).GetTimeSpan());
+        Equal(TimeSpan.Parse("11:51:34"),sheet.Cell(3,2).GetTimeSpan());Equal("Existing description",sheet.Cell(2,6).GetString());
+    });
+    Check("A prepared row waits for the work minimum, keeps an ongoing end blank and is completed on a later append",()=>
+    {
+        var path=Fixture("prepared-live");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,19);s.Cell(2,2).Clear(XLClearOptions.Contents);b.Save();}
+        var unlocked=Event(19,"08:00",false);
+        WorkReport[] Live(string at)=>WorkReports.Build([unlocked],settings,lunches,At(19,at),zone).ToArray();
+        Equal(0,service.Preview(path,Live("08:05:59"),6).Partials.Count);
+        var p=service.Preview(path,Live("08:06"),6);True(p.Partials.Single().FillsStart&&p.Partials[0].Interval.Open);service.Commit(p,[2]);
+        using(var b=new XLWorkbook(path)){Equal(TimeSpan.FromHours(8),b.Worksheet("Details").Cell(2,2).GetTimeSpan());True(b.Worksheet("Details").Cell(2,3).IsEmpty());}
+        var ended=WorkReports.Build([unlocked,Event(19,"09:00",true)],settings,lunches,At(19,"10:00"),zone);
+        p=service.Preview(path,ended);True(!p.Partials.Single().FillsStart);service.Commit(p,[2]);
+        using(var b=new XLWorkbook(path)){Equal(TimeSpan.FromHours(9),b.Worksheet("Details").Cell(2,3).GetTimeSpan());True(b.Worksheet("Details").Cell(3,1).IsEmpty());}
+        Equal(0,service.Preview(path,ended).Partials.Count);
+    });
+    Check("A prepared row after midnight continues the work date without repeating its earlier section",()=>
+    {
+        var path=Fixture("prepared-midnight");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,18);s.Cell(2,2).Value=TimeSpan.FromHours(22);s.Cell(2,3).Value=TimeSpan.FromMinutes(10);s.Cell(3,1).Value=new DateTime(2026,10,18);b.Save();}
+        var days=WorkReports.Build([Event(18,"22:00",false),Event(19,"00:10",true),Event(19,"00:25",false),Event(19,"01:00",true)],settings,lunches,now,zone);
+        var p=service.Preview(path,days);var c=p.Partials.Single();True(c.FillsStart);Equal(At(19,"00:25"),c.Interval.From);Equal(0,c.Following.Count);service.Commit(p,[3]);
+        using(var b=new XLWorkbook(path)){Equal(new DateTime(2026,10,18),b.Worksheet("Details").Cell(3,1).GetDateTime());Equal(TimeSpan.FromMinutes(25),b.Worksheet("Details").Cell(3,2).GetTimeSpan());}
+        Equal(0,service.Preview(path,days).Partials.Count);
+    });
+    Check("Prepared rows do not duplicate already covered work or replace an invalid time or a time formula",()=>
+    {
+        var days=WorkReports.Build(Day(16),settings,lunches,now,zone);
+        var path=Fixture("prepared-no-more");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,16);s.Cell(2,2).Value=TimeSpan.Parse("08:02:14");s.Cell(2,3).Value=TimeSpan.Parse("16:48:09");s.Cell(3,1).Value=new DateTime(2026,10,16);b.Save();}
+        Equal(0,service.Preview(path,days).Partials.Count);
+        foreach(var formula in new[]{false,true})
+        {
+            path=Fixture("prepared-invalid-"+formula);using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,16);if(formula)s.Cell(2,2).FormulaA1="IF(1=1,\"\",1)";else s.Cell(2,2).Value="unfinished";b.Save();}
+            Equal(0,service.Preview(path,days).Partials.Count);
+        }
+    });
+    Check("An unselected prepared row stays empty and an earlier unfinished start is resolved before using it",()=>
+    {
+        var path=Fixture("prepared-selection");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,16);s.Cell(2,2).Clear(XLClearOptions.Contents);b.Save();}
+        var days=WorkReports.Build(Day(16).Concat(Day(19).SkipLast(1)),settings,lunches,now,zone);
+        var p=service.Preview(path,days);True(p.Partials.Single().FillsStart);service.Commit(p,[]);
+        using(var b=new XLWorkbook(path)){True(b.Worksheet("Details").Cell(2,2).IsEmpty()&&b.Worksheet("Details").Cell(2,3).IsEmpty());}
+        path=Fixture("prepared-after-open");using(var b=new XLWorkbook(path)){var s=b.Worksheet("Details");s.Cell(2,1).Value=new DateTime(2026,10,16);s.Cell(2,2).Value=TimeSpan.Parse("08:02:14");s.Cell(3,1).Value=new DateTime(2026,10,16);b.Save();}
+        p=service.Preview(path,days);Equal(1,p.Partials.Count);Equal(2,p.Partials[0].Row);True(!p.Partials[0].FillsStart);
+    });
     Check("Incorrect Details schema fails before modification",()=>{var path=Fixture("schema");using(var b=new XLWorkbook(path)){b.Worksheet("Details").Cell(1,1).Value="Wrong";b.Save();}Throws<InvalidDataException>(()=>service.Preview(path,reports));});
     Check("1904 date workbooks retain their epoch",()=>{var path=Fixture("epoch");using(var z=ZipFile.Open(path,ZipArchiveMode.Update)){XNamespace n="http://schemas.openxmlformats.org/spreadsheetml/2006/main";var e=z.GetEntry("xl/workbook.xml")!;XDocument book;using(var s=e.Open())book=XDocument.Load(s);var prop=book.Root!.Element(n+"workbookPr");if(prop is null){prop=new XElement(n+"workbookPr");book.Root.AddFirst(prop);}prop.SetAttributeValue("date1904",1);e.Delete();using(var s=z.CreateEntry("xl/workbook.xml").Open())book.Save(s);e=z.GetEntry("xl/worksheets/sheet1.xml")!;XDocument sheet;using(var s=e.Open())sheet=XDocument.Load(s);sheet.Descendants(n+"c").Single(c=>(string?)c.Attribute("r")=="A2").Element(n+"v")!.Value=(new DateTime(2026,10,14).ToOADate()-1462).ToString(CultureInfo.InvariantCulture);e.Delete();using(var s=z.CreateEntry("xl/worksheets/sheet1.xml").Open())sheet.Save(s);}var p=service.Preview(path,reports);True(p.Date1904);Equal(new DateOnly(2026,10,14),p.LastDate!.Value);service.Commit(p,[]);Equal(new DateOnly(2026,10,19),service.Preview(path,reports).LastDate!.Value);});
     Check("Empty workbook data can be appended without a prior date",()=>{var path=Fixture("empty");using(var b=new XLWorkbook(path)){b.Worksheet("Details").Row(2).Clear();b.Save();}var p=service.Preview(path,reports);True(p.LastDate is null);service.Commit(p,[]);using var result=new XLWorkbook(path);Equal("yyyy.mm.dd",result.Worksheet("Details").Cell(2,1).Style.NumberFormat.Format);});

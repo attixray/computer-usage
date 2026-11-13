@@ -297,6 +297,21 @@ const {parseHTML} = require('linkedom');
     assert.match(text,/Utána új sorként/);assert.equal(document.querySelectorAll('[data-partial-following]').length,1);assert.match(text,/üresen marad \(folyamatban\)/);
     assert.match(text,/legfeljebb 3 perccel/);previewPartials=[];await click('[data-close-plan]');
   });
+  await check('A prepared date-only row is selected in the preview, can be unchecked and keeps an open end explicit',async()=>{
+    const section=clone(state.days[0].sections[0]),language=state.settings.language,sections=clone(state.days[0].sections);
+    state.days[0].sections=[];previewPartials=[{row:6457,section:{...section,open:false},following:[section],fillsStart:true,completesRow:true}];
+    state.settings.language='hu';await click('[data-refresh]');await click('[data-append]');
+    const checkbox=node('[data-partial="6457"]');assert.ok(checkbox.hasAttribute('checked'));
+    assert.equal(node('[data-commit]').disabled,false);assert.match(node('[data-import]').textContent,/Előkészített sor kitöltése \(6457\. sor\)/);
+    assert.match(node('[data-import]').textContent,/következő hiányzó munkaszakasz/);assert.equal(document.querySelectorAll('[data-partial-following]').length,1);
+    checkbox.removeAttribute('checked');checkbox.dispatchEvent(new window.Event('change',{bubbles:true}));await flush();assert.equal(node('[data-commit]').disabled,true);
+    await click('[data-close-plan]');state.settings.language='en';await click('[data-refresh]');
+    previewPartials[0].section.open=true;await click('[data-append]');
+    assert.match(node('[data-import]').textContent,/Fill prepared row \(row 6457\)/);assert.match(node('[data-import]').textContent,/left blank \(in progress\)/);
+    assert.match(node('[data-import]').textContent,/empty start and end/);
+    await click('[data-commit]');assert.equal(JSON.stringify(calls.findLast(c=>c.command==='commit').data.partials),'[6457]');
+    previewPartials=[];state.days[0].sections=sections;state.settings.language=language;await click('[data-refresh]');
+  });
   await check('Calendar carry uses explicit labels without adding fake Windows records to the event list',async()=>{
     const original=clone(state.days[0]),language=state.settings.language,day=state.days[0];
     Object.assign(day,{first:time('4:00','04:00:00'),last:time('4:00','04:00:00'),firstSystem:'Áthúzódó munkaszakasz',lastSystem:'Munkanap vége (naphatár)'});

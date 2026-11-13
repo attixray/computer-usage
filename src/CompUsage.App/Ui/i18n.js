@@ -2,6 +2,7 @@
 // Localization only touches UI text and accessible labels. Clipboard payloads and user values stay unchanged.
 window.i18n = (() => {
   const en = {
+    'Az üres kezdés és befejezés a következő hiányzó munkaszakasz adatait kapja. A folyamatban lévő szakasz vége üresen marad.':'The empty start and end will be filled with the next missing work section. A section in progress keeps its end blank.',
     'Áthúzódó munkaszakasz':'Work carried over from the previous day',
     'Munkanap vége (naphatár)':'End of workday (day boundary)',
     'Mérési napló':'Measurement log',
@@ -229,6 +230,7 @@ window.i18n = (() => {
         [/^(\d+) új nap · (\d+) új sor(?: · (\d+) megkezdett sor)?$/,(_,d,r,p)=>`${d} new days · ${r} new rows${p?' · '+p+' unfinished rows':''}`],
         [/^(\d+) új sor · a lezárt, teljes napokból\. A Details leírás üres marad\.$/,'$1 new rows from completed days. The Details description stays blank.'],
         [/^Megkezdett sor befejezése \((\d+)\. sor\)$/,'Complete unfinished row (row $1)'],
+        [/^Előkészített sor kitöltése \((\d+)\. sor\)$/,'Fill prepared row (row $1)'],
         [/^Összes naplóesemény \((\d+)\)$/,'All log events ($1)'],
         [/^Munkaszakaszok \((\d+)\)$/,'Work sections ($1)'],
         [/^(\d+) új sor · a teljes napokból és a mai napból\. A folyamatban lévő szakasz vége üresen marad\. Csak az A–C oszlop \(Date, From, To\) íródik; a Duration képletei és a Details nem változnak\.$/,'$1 new rows from complete days and today. The end of a section in progress stays blank. Only columns A–C (Date, From, To) are written; Duration formulas and Details are left unchanged.'],
